@@ -1,167 +1,127 @@
-function onEdit(e) {
-  const spreadsheet = e.source;
-  const sheet = spreadsheet.getActiveSheet();
+function getUserPositions(spreadsheet, marketId) {
+  const ledgerSheet = spreadsheet.getSheetByName("Ledger");
+  const data = ledgerSheet.getDataRange().getValues();
+  const positions = {};
 
-  // Handle trade events
-  if (
-    e.value === "TRUE" &&
-    e.range.getColumn() === 1 &&
-    sheet.getName().startsWith("Trade")
-  ) {
-    const eRangeA1Notation = e.range.getA1Notation();
-    // const sheetNameBang = sheet.getName() + "!";
-    // if (spreadsheet.getRangeByName(sheetNameBang + "TradeExecuteTrade").getA1Notation() === eRangeA1Notation){
-    if (eRangeA1Notation == "A17") {
-      e.range.setValue("FALSE");
-      executeTrade(spreadsheet, sheet, e.user.getEmail());
-    }
-    // else if (spreadsheet.getRangeByName(sheetNameBang + "TradeClearForm").getA1Notation() === eRangeA1Notation){
-    else if (eRangeA1Notation == "A20") {
-      e.range.setValue("FALSE");
-      clearTradeForm(spreadsheet, sheet);
-    }
-  }
+  // Skip header row (index 0)
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    // const transactionMarketId = row[3]; // Column D (Market Id)
 
-  // Handle trade execution on Trade sheets
-  // Column F (Status)
-  else if (e.range.getColumn() === 6 && sheet.getName() === "Markets") {
-    handleMarketStatusChange(
-      spreadsheet,
-      sheet,
-      e.range.getRow(),
-      e.value,
-      e.oldValue,
-      e.user.getEmail(),
-    );
-  }
-}
+    // Skip resolution transactions when calculating positions
+    if (row[3] == marketId) {
+      const userId = row[2]; // Column C (User Id)
+      // const shareType = row[5]; // Column F (Share Type)
+      // const quantity = row[6]; // Column G (Quantity)
 
-function clearTradeForm(spreadsheet, sheet) {
-  // const sheetNameBang = sheet.getName() + '!'
+      if (!positions[userId]) {
+        positions[userId] = {
+          yesShares: 0,
+          noShares: 0,
+        };
+      }
 
-  // Clear content ranges
-  sheet
-    .getRangeList([
-      "A3",
-      "A7",
-      "A11",
-      "B17",
-    ])
-    .clearContent();
-
-  // Set quantity to zero
-  spreadsheet.getRange("A14").setValue(0);
-  // spreadsheet.getRangeByName(sheetNameBang + 'TradeQuantity').setValue(0);
-}
-
-function setStatusMessage(spreadsheet, message, isError = false) {
-  // spreadsheet.getRangeByName(sheetNameBang + 'TradeMessageStatus').getA1Notation(),
-  const statusCell = spreadsheet.getRange("B17");
-  statusCell.setValue(message);
-  if (isError) {
-    statusCell.setFontColor("#ff0000"); // Red for errors
-  } else {
-    statusCell.setFontColor("#008000"); // Green for success
-  }
-}
-
-function executeTrade(spreadsheet, sheet, userEmail) {
-  spreadsheet.getRange("B17").clearContent();
-
-  const userId = spreadsheet.getRange("B3").getValue();
-  const marketId = spreadsheet.getRange("B7").getValue();
-  const marketStatus = spreadsheet.getRange("D7").getValue();
-  const shareType = spreadsheet.getRange("A11").getValue();
-  const quantity = spreadsheet.getRange("A14").getValue();
-  const totalCost = spreadsheet.getRange("B14").getValue();
-  const balance = spreadsheet.getRange("C3").getValue();
-
-  // Validation
-  if (!userId) {
-    setStatusMessage(spreadsheet, "Please select User", true);
-    return;
-  }
-  if (!marketId) {
-    setStatusMessage(spreadsheet, "Please select Market", true);
-    return;
-  }
-  if (marketStatus !== "Open") {
-    setStatusMessage(spreadsheet, "Selected market is not open", true);
-    return;
-  }
-  if (shareType !== "Yes" && shareType !== "No") {
-    setStatusMessage(spreadsheet, "Please select valid Share type", true);
-    return;
-  }
-
-  if (typeof quantity !== "number" || isNaN(quantity)) {
-    setStatusMessage(
-      spreadsheet,
-      "Please select a valid number of shares",
-      true,
-    );
-    return;
-  }
-  if (quantity == 0) {
-    setStatusMessage(spreadsheet, "Zero shares traded. Nothing to do", false);
-    return;
-  } else if (quantity < 0) {
-    // const relevantBalanceShares = (shareType === 'Yes') ?
-    //   spreadsheet.getRangeByName(sheetNameBang + 'TradeUserYesShares').getValue()
-    //   : spreadsheet.getRangeByName(sheetNameBang + 'TradeUserNoShares').getValue();
-    const relevantBalanceShares =
-      shareType === "Yes"
-        ? sheet.getRange("I8").getValue()
-        : sheet.getRange("J8").getValue();
-    if (quantity < -relevantBalanceShares) {
-      setStatusMessage(
-        spreadsheet,
-        "Cannot sell more shares than owned " + relevantBalanceShares,
-        true,
-      );
-      return;
+      if (row[5] === "Yes") {
+        positions[userId].yesShares += row[6];
+      } else {
+        positions[userId].noShares += row[6];
+      }
     }
   }
-  if (typeof totalCost !== "number" || isNaN(totalCost)) {
-    setStatusMessage(spreadsheet, "Cost must be a finite number", true);
-    return;
-  }
-  if (totalCost > 0 && totalCost > balance) {
-    setStatusMessage(
-      spreadsheet,
-      "Insufficient balance to complete this trade",
-      true,
-    );
-    return;
-  }
 
-  // setStatusMessage(spreadsheet, 'Wait while executing trade!', false);
-  spreadsheet.getRange("A14").setValue(0);
-
-  // Record transaction with all required fields
-  const transactions = [
-    {
-      timestamp: new Date(),
-      userId: userId,
-      userEmail: userEmail,
-      marketId: marketId,
-      shareType: shareType,
-      quantity: quantity,
-      totalCost: totalCost,
-      prevBalance: balance,
-      transactionType: "user trade",
-    },
-  ];
-
-  recordTransactionsBatch(spreadsheet, transactions);
-  setStatusMessage(spreadsheet, "Trade executed successfully!", false);
+  return positions;
 }
 
-/**
- * Optimized batch transaction recording function
- * Records multiple transactions in a single API call while tracking balance changes
- */
+function getUserPositionForMarket(spreadsheet, userId, marketId) {
+  const positions = getUserPositions(spreadsheet, marketId);
+  const pos = positions[userId];
+  return pos || { yesShares: 0, noShares: 0 };
+}
+
+function getCurrentUserBalance(spreadsheet, userId) {
+  const balances = getCurrentUserBalancesBatch(spreadsheet, [userId]);
+  return balances.get(userId) || 0;
+}
+
+function getCurrentUserBalancesBatch(spreadsheet, userIds) {
+  const ledgerSheet = spreadsheet.getSheetByName("Ledger");
+  const data = ledgerSheet.getDataRange().getValues();
+  const balances = new Map();
+
+  // Initialize all users with default balance of 10k
+  userIds.forEach((userId) => balances.set(userId, 10000));
+
+  // Work backwards through ledger to find most recent balance for each user
+  const foundUsers = new Set();
+  let nMissingUsers = userIds.length;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const row = data[i];
+    const userId = row[2]; // Column C (User Id)
+
+    if (userIds.includes(userId) && !foundUsers.has(userId)) {
+      balances.set(userId, row[9]); // Column J (newBalance)
+      foundUsers.add(userId);
+      nMissingUsers--;
+    }
+
+    if (nMissingUsers === 0) {
+      // Found the last balance of all users
+      break;
+    }
+  }
+
+  return balances;
+}
+
+function getMarketData(spreadsheet, marketId) {
+  const sheet = spreadsheet.getSheetByName("Markets");
+  if (!sheet) return null;
+  const values = sheet.getDataRange().getValues(); // assumes header row
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (String(row[0]) === String(marketId)) {
+      return {
+        status: row[5], // Column F (Status)
+        liquidity: row[6], // Column G (Liquidity)
+        yesShares: Number(row[8] || 0), // Column I (Yes Shares)
+        noShares: Number(row[9] || 0), // Column J (No Shares)
+      };
+    }
+  }
+  return null;
+}
+
+function computeCost(liquidity, yesShares, noShares, shareType, quantity) {
+  // Compute LMSR cost for a trade
+
+  if (liquidity <= 0) return NaN; // Avoid division by zero
+
+  // Current score
+  const currentScore = Math.log(
+    Math.exp(yesShares / liquidity) + Math.exp(noShares / liquidity),
+  );
+
+  // New shares after trade
+  const newYes = shareType === "Yes" ? yesShares + quantity : yesShares;
+  const newNo = shareType === "No" ? noShares + quantity : noShares;
+
+  // New score
+  const newScore = Math.log(
+    Math.exp(newYes / liquidity) + Math.exp(newNo / liquidity),
+  );
+
+  // Cost = (newScore - currentScore) * liquidity
+  const cost = (newScore - currentScore) * liquidity * 100;
+
+  // Rounded to 2 decimals
+  return Math.round(cost * 100) / 100;
+}
+
 function recordTransactionsBatch(spreadsheet, transactions) {
+  /**
+   * Optimized batch transaction recording function
+   * Records multiple transactions in a single API call while tracking balance changes
+   */
   if (!transactions || transactions.length === 0) return;
 
   const transactionsSheet = spreadsheet.getSheetByName("Ledger");
@@ -171,14 +131,19 @@ function recordTransactionsBatch(spreadsheet, transactions) {
   let nextId = 1;
   if (lastRow > 1) {
     const prevId = transactionsSheet.getRange(lastRow, 1).getValue();
-    nextId = (typeof prevId === "number" && !isNaN(prevId)) ? prevId + 1 : lastRow;
+    nextId =
+      typeof prevId === "number" && !isNaN(prevId) ? prevId + 1 : lastRow;
   }
 
   // Track user balances across transactions
   const userBalanceTracker = new Map();
   const uniqueUserIds = [...new Set(transactions.map((t) => t.userId))];
-  const initialBalances = getCurrentUserBalancesBatch(spreadsheet, uniqueUserIds);
-  for (const [userId, balance] of initialBalances) userBalanceTracker.set(userId, balance);
+  const initialBalances = getCurrentUserBalancesBatch(
+    spreadsheet,
+    uniqueUserIds,
+  );
+  for (const [userId, balance] of initialBalances)
+    userBalanceTracker.set(userId, balance);
 
   const batchData = [];
 
@@ -213,49 +178,95 @@ function recordTransactionsBatch(spreadsheet, transactions) {
       lastRow + 1,
       1,
       batchData.length,
-      batchData[0].length
+      batchData[0].length,
     );
     range.setValues(batchData);
   }
 }
 
-function handleMarketStatusChange(
+function executeTradeCore(
   spreadsheet,
-  marketSheet,
-  row,
-  newStatus,
-  oldStatus,
-  userEmail,
+  {
+    userId,
+    marketId,
+    marketStatus, // "Open" required
+    shareType, // "Yes" or "No"
+    quantity, // positive buy, negative sell
+    totalCost, // signed total cost for the trade (positive cost reduces balance)
+    userEmail, // info to record for audit/logging
+  },
 ) {
-  const marketId = marketSheet.getRange(row, 1).getValue(); // Column A (Market ID)
+  // Core trade executor: no UI cell reads/writes. Safe to call from bot/webhook.
 
-  if (!marketId) return;
+  // Validate basic required inputs
+  if (!userId) {
+    return { ok: false, message: "Please select User" };
+  }
+  if (!marketId) {
+    return { ok: false, message: "Please select Market" };
+  }
+  if (marketStatus !== "Open") {
+    return { ok: false, message: "Selected market is not open" };
+  }
+  if (shareType !== "Yes" && shareType !== "No") {
+    return { ok: false, message: "Please select valid Share type" };
+  }
 
-  // Check if market is being resolved
-  if (
-    (newStatus === "Resolved Yes" || newStatus === "Resolved No") &&
-    oldStatus !== newStatus
-  ) {
-    if (!(oldStatus === "Open" || oldStatus === "Closed")) {
-      // First unresolve market
-      unresolveMarket(spreadsheet, marketId, newStatus, userEmail);
+  if (typeof quantity !== "number" || isNaN(quantity)) {
+    return { ok: false, message: "Please select a valid number of shares" };
+  }
+  if (quantity === 0) {
+    return { ok: true, message: "Zero shares traded. Nothing to do" };
+  }
+
+  if (typeof totalCost !== "number" || !isFinite(totalCost)) {
+    return { ok: false, message: "Cost must be a finite number" };
+  }
+
+  // Validate selling does not exceed owned shares
+  if (quantity < 0) {
+    const pos = getUserPositionForMarket(spreadsheet, userId, marketId);
+    const relevantBalanceShares =
+      shareType === "Yes" ? pos.yesShares : pos.noShares;
+
+    if (-quantity > relevantBalanceShares) {
+      return {
+        ok: false,
+        message: "Cannot sell more shares than owned " + relevantBalanceShares,
+      };
     }
-    // Resolve unresolved market
-    resolveMarket(spreadsheet, marketId, newStatus, userEmail);
   }
 
-  // Check if market is being unresolved
-  else if (
-    (oldStatus === "Resolved Yes" || oldStatus === "Resolved No") &&
-    (newStatus === "Open" || newStatus === "Closed")
-  ) {
-    unresolveMarket(spreadsheet, marketId, newStatus, userEmail);
+  // Check user balance for positive cost
+  const balance = getCurrentUserBalance(spreadsheet, userId);
+  if (totalCost > 0 && totalCost > balance) {
+    return {
+      ok: false,
+      message: "Insufficient balance to complete this trade",
+    };
   }
+
+  // Record transaction
+  const transactions = [
+    {
+      timestamp: new Date(),
+      userId,
+      userEmail,
+      marketId,
+      shareType,
+      quantity,
+      totalCost,
+      transactionType: "user trade",
+    },
+  ];
+
+  recordTransactionsBatch(spreadsheet, transactions);
+  return { ok: true, message: "Trade executed successfully!" };
 }
 
 function resolveMarket(spreadsheet, marketId, resolution, userEmail) {
   SpreadsheetApp.getUi().alert("Resolving market " + marketId);
-  const userPositions = calculateUserPositions(spreadsheet, marketId);
+  const userPositions = getUserPositions(spreadsheet, marketId);
 
   const transactions = [];
   const timestamp = new Date();
@@ -363,79 +374,4 @@ function unresolveMarket(spreadsheet, marketId, newStatus, userEmail) {
   if (transactions.length > 0) {
     recordTransactionsBatch(spreadsheet, transactions);
   }
-}
-
-function calculateUserPositions(spreadsheet, marketId) {
-  const ledgerSheet = spreadsheet.getSheetByName("Ledger");
-  const data = ledgerSheet.getDataRange().getValues();
-  const positions = {};
-
-  // Skip header row (index 0)
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    // const transactionMarketId = row[3]; // Column D (Market Id)
-
-    // Skip resolution transactions when calculating positions
-    if (row[3] == marketId) {
-      const userId = row[2]; // Column C (User Id)
-      // const shareType = row[5]; // Column F (Share Type)
-      // const quantity = row[6]; // Column G (Quantity)
-
-      if (!positions[userId]) {
-        positions[userId] = {
-          yesShares: 0,
-          noShares: 0,
-        };
-      }
-
-      if (row[5] === "Yes") {
-        positions[userId].yesShares += row[6];
-      } else {
-        positions[userId].noShares += row[6];
-      }
-    }
-  }
-
-  return positions;
-}
-
-function getCurrentUserBalance(spreadsheet, userId) {
-  const balances = getCurrentUserBalancesBatch(spreadsheet, [userId]);
-  return balances.get(userId) || 0;
-}
-
-/**
- * Efficiently get current balances for multiple users in a single pass
- * @param {Spreadsheet} spreadsheet - The spreadsheet object
- * @param {Array} userIds - Array of user IDs to get balances for
- * @returns {Map} Map of userId -> current balance
- */
-function getCurrentUserBalancesBatch(spreadsheet, userIds) {
-  const ledgerSheet = spreadsheet.getSheetByName("Ledger");
-  const data = ledgerSheet.getDataRange().getValues();
-  const balances = new Map();
-
-  // Initialize all users with default balance of 10k
-  userIds.forEach((userId) => balances.set(userId, 10000));
-
-  // Work backwards through ledger to find most recent balance for each user
-  const foundUsers = new Set();
-  let nMissingUsers = userIds.length;
-  for (let i = data.length - 1; i >= 1; i--) {
-    const row = data[i];
-    const userId = row[2]; // Column C (User Id)
-
-    if (userIds.includes(userId) && !foundUsers.has(userId)) {
-      balances.set(userId, row[9]); // Column J (newBalance)
-      foundUsers.add(userId);
-      nMissingUsers--;
-    }
-
-    if (nMissingUsers === 0) {
-      // Found the last balance of all users
-      break;
-    }
-  }
-
-  return balances;
 }
