@@ -117,6 +117,26 @@ function computeCost(liquidity, yesShares, noShares, shareType, quantity) {
   return Math.round(cost * 100) / 100;
 }
 
+function simulateTrade(liquidity, yesShares, noShares, shareType, quantity) {
+  const cost = computeCost(liquidity, yesShares, noShares, shareType, quantity);
+
+  const newYesShares = shareType === "Yes" ? yesShares + quantity : yesShares;
+  const newNoShares = shareType === "No" ? noShares + quantity : noShares;
+
+  const yesPrice =
+    Math.exp(newYesShares / liquidity) /
+    (Math.exp(newYesShares / liquidity) + Math.exp(newNoShares / liquidity));
+  const noPrice =
+    Math.exp(newNoShares / liquidity) /
+    (Math.exp(newYesShares / liquidity) + Math.exp(newNoShares / liquidity));
+
+  return {
+    cost: cost,
+    newYesPrice: yesPrice * 100,
+    newNoPrice: noPrice * 100,
+  };
+}
+
 function recordTransactionsBatch(spreadsheet, transactions) {
   /**
    * Optimized batch transaction recording function

@@ -18,9 +18,200 @@ function doGet(e) {
     return handleGetBalance(discordHandle);
   }
 
+  if (action === "getTradePreview") {
+    return handleGetTradePreview(e.parameter);
+  }
+
   return ContentService.createTextOutput(
     JSON.stringify({ ok: false, error: "Invalid action specified." }),
   ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function _findUser(usersSheet, discordHandle) {
+  const usersData = usersSheet.getDataRange().getValues();
+  const usersHeaders = usersData.shift();
+  const handleIndex = usersHeaders.indexOf("Discord handle");
+  const usernameIndex = usersHeaders.indexOf("Username");
+
+  const userRow =
+    usersData.find(
+      (row) => row[handleIndex] && row[handleIndex] === discordHandle,
+    ) ||
+    usersData.find(
+      (row) => row[usernameIndex] && row[usernameIndex] === discordHandle,
+    );
+
+  if (!userRow) return null;
+
+  const user = {};
+  usersHeaders.forEach((header, i) => {
+    // Sanitize header to be a valid key
+    const key = header.replace(/\s+/g, "");
+    user[key] = userRow[i];
+  });
+  return {
+    userId: user["UserID"],
+    balance: user["CurrentCashBalance"],
+  };
+}
+
+function _findMarket(marketsSheet, marketId) {
+  const marketsData = marketsSheet.getDataRange().getValues();
+  const marketsHeaders = marketsData.shift();
+  const marketIdIndex = 0; // The first column is always "Market ID"
+
+  const marketRow = marketsData.find(
+    (row) =>
+      row[marketIdIndex] &&
+      row[marketIdIndex].toString() === marketId.toString(),
+  );
+
+  if (!marketRow) return null;
+
+  const market = {};
+  marketsHeaders.forEach((header, i) => {
+    const key = header.replace(/\s+/g, ""); // Sanitize header
+    market[key] = marketRow[i];
+  });
+
+  return {
+    question: market["Question"],
+    long_description: market["DetailedCriteria"],
+    status: market["Status"],
+    liquidity: market["Liquidity"],
+    pYes: market["YesPrice"],
+    yesShares: market["YesShares"],
+    noShares: market["NoShares"],
+    volume: market["Volume"],
+  };
+}
+
+function _getUserHoldings(positionsSheet, userId, marketId) {
+  const positionsData = positionsSheet.getDataRange().getValues();
+  const positionsHeaders = positionsData.shift();
+  const posUserIdIndex = positionsHeaders.indexOf("User Id");
+  const marketIdIndex = positionsHeaders.indexOf("Market Id");
+  const shareTypeIndex = positionsHeaders.indexOf("Share Type");
+  const quantityIndex = positionsHeaders.indexOf("SUM of Quantity");
+
+  const holdings = { userYes: 0, userNo: 0 };
+
+  positionsData.forEach((row) => {
+    if (
+      row[posUserIdIndex] &&
+      row[posUserIdIndex].toString() === userId.toString() &&
+      row[marketIdIndex] &&
+      row[marketIdIndex].toString() === marketId.toString()
+    ) {
+      const shareType = row[shareTypeIndex];
+      const quantity = row[quantityIndex];
+      if (shareType === "Yes") {
+        holdings.userYes = quantity;
+      } else if (shareType === "No") {
+        holdings.userNo = quantity;
+      }
+    }
+  });
+  return holdings;
+}
+
+function handleGetTradePreview(params) {
+  const { discordHandle, marketId, shareType, quantity: quantityStr } = params;
+  const quantity = Number(quantityStr);
+
+  if (!discordHandle || !marketId || !shareType || isNaN(quantity)) {
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: false,
+        error:
+          "Missing required parameters: discordHandle, marketId, shareType, quantity.",
+      }),
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const usersSheet = spreadsheet.getSheetByName("Users");
+    const marketsSheet = spreadsheet.getSheetByName("Markets");
+    const positionsSheet = spreadsheet.getSheetByName("Positions");
+
+    // 1. Get User and Market Data
+    const user = _findUser(usersSheet, discordHandle);
+    if (!user) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: `User '${discordHandle}' not found.`,
+        }),
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const market = _findMarket(marketsSheet, marketId);
+    if (!market) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: `Market with ID '${marketId}' not found.`,
+        }),
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const holdings = _getUserHoldings(positionsSheet, user.userId, marketId);
+
+    // 2. Simulate Trade by calling the pure function
+    // This function is globally available from market_func.js
+    const simulation = simulateTrade(
+      market.liquidity,
+      market.yesShares,
+      market.noShares,
+      shareType,
+      quantity,
+    );
+
+    // 3. Format Response
+    const preview = {
+      user: {
+        id: user.userId,
+        discordHandle: discordHandle,
+        balance: user.balance,
+      },
+      market: {
+        id: marketId,
+        description: market.question,
+        long_description: market.long_description,
+        status: market.status,
+        liquidity: market.liquidity,
+        pYes: market.pYes,
+        pNo: 100 - market.pYes,
+        yesShares: market.yesShares,
+        noShares: market.noShares,
+        volume: market.volume,
+      },
+      userHoldings: {
+        yesShares: holdings.userYes,
+        noShares: holdings.userNo,
+      },
+      trade: {
+        shareType: shareType,
+        quantity: quantity,
+        cost: simulation.cost,
+      },
+      simulation: {
+        newPYes: simulation.newYesPrice,
+        newPNo: simulation.newNoPrice,
+        newBalance: user.balance - simulation.cost,
+      },
+    };
+
+    return ContentService.createTextOutput(
+      JSON.stringify({ ok: true, data: preview }),
+    ).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    console.error(`Error in handleGetTradePreview: ${err.stack}`);
+    return ContentService.createTextOutput(
+      JSON.stringify({ ok: false, error: "A server-side error occurred." }),
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function handleGetBalance(discordHandle) {
@@ -37,18 +228,8 @@ function handleGetBalance(discordHandle) {
     const marketsSheet = spreadsheet.getSheetByName("Markets");
 
     // --- Step 1: Find User ID and Balance ---
-    const usersData = usersSheet.getDataRange().getValues();
-    const usersHeaders = usersData.shift();
-    const handleIndex = usersHeaders.indexOf("Discord handle"),
-      usernameIndex = usersHeaders.indexOf("Username"),
-      userIdIndex = usersHeaders.indexOf("User ID"),
-      balanceIndex = usersHeaders.indexOf("Current Cash Balance");
-
-    let userRow =
-      usersData.find((row) => row[handleIndex] === discordHandle) ||
-      usersData.find((row) => row[usernameIndex] === discordHandle);
-
-    if (!userRow) {
+    const user = _findUser(usersSheet, discordHandle);
+    if (!user) {
       return ContentService.createTextOutput(
         JSON.stringify({
           ok: false,
@@ -56,8 +237,6 @@ function handleGetBalance(discordHandle) {
         }),
       ).setMimeType(ContentService.MimeType.JSON);
     }
-    const userId = userRow[userIdIndex];
-    const balance = userRow[balanceIndex];
 
     // --- Step 2: Get Market Data ---
     const marketsData = marketsSheet.getDataRange().getValues();
@@ -77,16 +256,17 @@ function handleGetBalance(discordHandle) {
     // --- Step 3: Get User Holdings and Costs ---
     const positionsData = positionsSheet.getDataRange().getValues();
     const positionsHeaders = positionsData.shift();
-    const posUserIdIndex = positionsHeaders.indexOf("User Id"),
-      marketIdIndex = positionsHeaders.indexOf("Market Id"),
-      shareTypeIndex = positionsHeaders.indexOf("Share Type"),
-      quantityIndex = positionsHeaders.indexOf("SUM of Quantity"),
-      totalCostIndex = positionsHeaders.indexOf("SUM of TotalCost");
+    const posUserIdIndex = positionsHeaders.indexOf("User Id");
+    const marketIdIndex = positionsHeaders.indexOf("Market Id");
+    const shareTypeIndex = positionsHeaders.indexOf("Share Type");
+    const quantityIndex = positionsHeaders.indexOf("SUM of Quantity");
+    const totalCostIndex = positionsHeaders.indexOf("SUM of TotalCost");
 
     const userShares = {};
     positionsData.forEach((row) => {
       if (
-        row[posUserIdIndex].toString() === userId.toString() &&
+        row[posUserIdIndex] &&
+        row[posUserIdIndex].toString() === user.userId.toString() &&
         row[marketIdIndex]
       ) {
         const marketId = row[marketIdIndex];
@@ -106,7 +286,8 @@ function handleGetBalance(discordHandle) {
 
     // --- Step 4: Combine and Format Response ---
     const portfolio = {
-      balance: balance,
+      userId: user.userId,
+      balance: user.balance,
       holdings: [],
     };
 
@@ -134,7 +315,7 @@ function handleGetBalance(discordHandle) {
       JSON.stringify({ ok: true, data: portfolio }),
     ).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
-    console.error(`Error in handleGetBalance: ${err}`);
+    console.error(`Error in handleGetBalance: ${err.stack}`);
     return ContentService.createTextOutput(
       JSON.stringify({ ok: false, error: "A server-side error occurred." }),
     ).setMimeType(ContentService.MimeType.JSON);

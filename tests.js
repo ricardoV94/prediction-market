@@ -85,7 +85,7 @@ function runLiveTradeTest() {
  * A test function to simulate a GET request for the /balance command.
  * This version securely reads the API token from Script Properties.
  */
-function testDoGet() {
+function testDoGetBalance() {
   // --- 1. Configure the Test Event ---
   // This object simulates the 'e' parameter that doGet receives from a real web request.
   const eventObject = {
@@ -99,6 +99,32 @@ function testDoGet() {
       // The Discord handle or username of the user you want to look up.
       // Change this value to test different users from your 'Users' sheet.
       discordHandle: "Ricardo Vieira",
+    },
+  };
+
+  // --- 2. Execute the Function and Log the Output ---
+  const result = doGet(eventObject).getContent();
+  Logger.log(result);
+}
+
+function testDoGetTradePreview() {
+  // --- 1. Configure the Test Event ---
+  // This object simulates the 'e' parameter that doGet receives from a real web request.
+  const eventObject = {
+    parameter: {
+      // SECURE: Reads the token from the global constant, which is loaded from Script Properties.
+      token: API_TOKEN,
+
+      // The action you want to test.
+      action: "getTradePreview",
+
+      // The Discord handle or username of the user you want to look up.
+      // Change this value to test different users from your 'Users' sheet.
+      discordHandle: "Ricardo Vieira",
+
+      marketId: 1,
+      shareType: "Yes",
+      quantity: 15,
     },
   };
 

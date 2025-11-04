@@ -55,3 +55,27 @@ def simulate_liquidation_proceeds(
     no_proceeds, _ = _sell_no_proceeds_and_update_r(r_after_yes, float(liquidity), s_no)
 
     return _round_cents(yes_proceeds + no_proceeds)
+
+
+def calculate_trade_cost(
+    p_yes_pct: float, liquidity: float, quantity: int, share_type: ShareType
+) -> float:
+    """
+    Calculates the cost of buying a certain number of shares.
+    """
+    if liquidity is None or liquidity <= 0 or quantity <= 0:
+        return 0.0
+
+    p_yes = max(1e-9, min(1.0 - 1e-9, float(p_yes_pct) / 100.0))
+    r = p_yes / (1.0 - p_yes)
+    b = float(liquidity)
+    s = float(quantity)
+
+    if share_type == ShareType.Yes:
+        # Cost of buying 's' Yes shares
+        cost = b * math.log((r * math.exp(s / b) + 1.0) / (r + 1.0)) * 100.0
+    else:  # ShareType.No
+        # Cost of buying 's' No shares
+        cost = b * math.log((r + math.exp(s / b)) / (r + 1.0)) * 100.0
+
+    return _round_cents(cost)
