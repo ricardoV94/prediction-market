@@ -18,7 +18,6 @@ for entry in market_entries:
     market_id = d["Market ID"] = int(d["Market ID"])
     d.setdefault("Detailed Criteria", "")
     markets[market_id] = d
-pprint(markets)
 
 
 def seconds_before(time_str: str, s=1) -> str:
@@ -50,7 +49,7 @@ for line in contents:
             "info": {
                 "user_id": user_id,
                 "user_name": user_names[user_id],
-                "discord_name": "",
+                "discord_id": "",
                 "reason": "new user",
             },
         }

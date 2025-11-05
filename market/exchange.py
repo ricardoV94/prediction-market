@@ -1,37 +1,12 @@
-from json import loads as json_loads, dumps as json_dumps
 from collections import namedtuple
-from math import exp
+from math import exp, log
 from datetime import datetime
 from dataclasses import dataclass
-from pathlib import Path
 from enum import Enum
 
+from market.ledger import Ledger
+
 Shares = namedtuple("Shares", ["No", "Yes"])
-
-
-@dataclass
-class Ledger:
-    file: Path
-    entries: list
-
-    @classmethod
-    def from_file(cls, file: str):
-        file = Path(file)
-        if not file.exists():
-            file.touch()
-            entries = []
-        else:
-            entries = [
-                json_loads(line)
-                for line in file.read_text(encoding="utf-8").splitlines()
-            ]
-        return cls(file=file, entries=entries)
-
-    def append(self, event):
-        json_event = json_dumps(event)
-        with self.file.open("a", encoding="utf-8") as f:
-            f.write(json_event)
-        return json_event
 
 
 class MarketStatus(Enum):
@@ -75,24 +50,63 @@ class Market:
     def no_price(self) -> float:
         return 100 - self.yes_price
 
+    def simulate_liquidation_proceeds(self, user_no_shares, user_yes_shares) -> float:
+        """Computes total proceeds from unwinding a user position in the current market."""
+        yes_price = self.yes_price
+        b = self.liquidity
+
+        p_yes = yes_price / 100
+        r = p_yes / (1.0 - p_yes)
+
+        proceeds = 0
+        # Simulate selling Yes shares first
+        if user_yes_shares:
+            cost = b * log((r * exp(-user_yes_shares / b) + 1.0) / (r + 1.0)) * 100
+            proceeds = round(-cost, 2)
+            r = r * exp(-user_yes_shares / b)
+        if user_no_shares:
+            cost = b * log((r + exp(-user_no_shares / b)) / (r + 1.0)) * 100
+            proceeds += round(-cost, 2)
+        return round(proceeds, 2)
+
 
 @dataclass
 class User:
     id: int
     user_name: str
-    discord_name: str
     balance: float
     positions: dict[int, Shares]
 
 
 @dataclass
 class Exchange:
-    markets: dict[int, Market]
-    users: dict[int, User]
+    ledger: Ledger
+    _markets: dict[int, Market]
+    _users: dict[int, User]
+    _discord_user_ids: dict[int, int]
+    _ledger_index: int
+
+    @property
+    def markets(self):
+        if self._ledger_index != len(self.ledger.entries):
+            self.update_from_extended_ledger()
+        return self._markets
+
+    @property
+    def users(self):
+        if self._ledger_index != len(self.ledger.entries):
+            self.update_from_extended_ledger()
+        return self._users
+
+    @property
+    def discord_user_ids(self):
+        if self._ledger_index != len(self.ledger.entries):
+            self.update_from_extended_ledger()
+        return self._discord_user_ids
 
     @staticmethod
     def _markets_from_ledger(ledger):
-        date_format = "%Y-%m-%d"
+        date_format = ledger.date_format
         markets = {}
         # First loop to collect markets data
         for entry in reversed(ledger.entries):
@@ -164,6 +178,7 @@ class Exchange:
     @staticmethod
     def _users_from_ledger(ledger):
         users = {}
+        discord_user_ids = {}
         # First loop to collect most recent user data
         for entry in reversed(ledger.entries):
             if entry["type"] != "user_update":
@@ -176,11 +191,13 @@ class Exchange:
             user = User(
                 id=user_id,
                 user_name=info["user_name"],
-                discord_name=info["discord_name"],
                 balance=0,
                 positions={},
             )
             users[user_id] = user
+            if info["discord_id"]:
+                discord_id = int(info["discord_id"])
+                discord_user_ids[discord_id] = user_id
 
         # Second loop to update user balances and positions
         # We reply transactions historically
@@ -203,18 +220,54 @@ class Exchange:
                     assert no_shares >= 0
                 users[user_id].positions[market_id] = Shares(no_shares, yes_shares)
                 users[user_id].balance = info["new_balance"]
-        return users
+        return users, discord_user_ids
 
     @classmethod
     def from_ledger(cls, ledger: Ledger):
         markets = cls._markets_from_ledger(ledger)
-        users = cls._users_from_ledger(ledger)
-        return cls(markets=markets, users=users)
+        users, discord_user_ids = cls._users_from_ledger(ledger)
+        return cls(
+            ledger=ledger,
+            _markets=markets,
+            _users=users,
+            _discord_user_ids=discord_user_ids,
+            _ledger_index=len(ledger.entries),
+        )
+
+    def update_from_extended_ledger(self):
+        for entry in self.ledger.entries[self._ledger_index :]:
+            info = entry["info"]
+            match entry["type"]:
+                case "user_update":
+                    user_id = info["user_id"]
+                    if user_id in self._users:
+                        user = self._users[user_id]
+                        balance = user.balance
+                        positions = user.positions.copy()
+                    else:
+                        balance = 0
+                        positions = {}
+                    user = User(
+                        id=user_id,
+                        user_name=info["user_name"],
+                        balance=balance,
+                        positions=positions,
+                    )
+                    self._users[user_id] = user
+                    if info["discord_id"]:
+                        discord_id = info["discord_id"]
+                        self._discord_user_ids[discord_id] = user_id
+                case _:
+                    raise NotImplementedError(
+                        f"Entry type {entry['type']} not yet supported"
+                    )
+
+        self._ledger_index = len(self.ledger.entries)
 
 
 if __name__ == "__main__":
     from pprint import pprint
 
-    ledger = Ledger.from_file("data/ledger.json")
+    ledger = Ledger.from_json("data/ledger.json")
     exchange = Exchange.from_ledger(ledger)
     pprint(exchange)

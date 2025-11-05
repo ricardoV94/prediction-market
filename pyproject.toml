@@ -26,4 +26,5 @@ dependencies = [
 "Bug Tracker" = "https://github.com/yourusername/prediction-market/issues"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["market*", "discord_bot*"]

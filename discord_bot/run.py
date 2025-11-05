@@ -1,22 +1,31 @@
+import traceback
 import os
 import discord
 from discord import app_commands, ui
 import requests
 from dotenv import load_dotenv
-from computation import simulate_liquidation_proceeds, _round_cents, ShareType
+from pprint import pprint
+
+from market.exchange import Ledger, Exchange
+from discord_bot.registration import start_registration_flow
+
 
 # --- Configuration ---
 load_dotenv()
+DEBUG = True
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")
-SCRIPT_URL = os.getenv("SCRIPT_URL")
-API_TOKEN = os.getenv("API_TOKEN")
 
-if not all([DISCORD_BOT_TOKEN, SCRIPT_URL, API_TOKEN]):
+if not all([DISCORD_BOT_TOKEN]):
     print("FATAL: Missing one or more required environment variables.")
     exit(1)
 
-# --- Bot Setup ---
+# --- Setup ---
+LEDGER = Ledger.from_json("data/ledger.json")
+EXCHANGE = Exchange.from_ledger(LEDGER)
+pprint(EXCHANGE.markets)
+pprint(EXCHANGE.users)
+pprint(EXCHANGE.discord_user_ids)
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
@@ -28,7 +37,7 @@ class ConfirmView(ui.View):
         self,
         author: discord.User,
         market_id: str,
-        share_type: ShareType,
+        share_type: "str",
         quantity: int,
         cost: float,
         question: str,
@@ -141,6 +150,139 @@ async def on_ready():
 
 # --- Slash Commands ---
 @tree.command(
+    name="register",
+    description="Register in the Prediction Market with the Discord bot.",
+)
+async def register(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await start_registration_flow(interaction, EXCHANGE)
+
+
+@tree.command(name="balance", description="Check your current balance.")
+async def balance(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        try:
+            user_id = EXCHANGE.discord_user_ids[interaction.user.id]
+        except KeyError:
+            if DEBUG:
+                print(f"New user trying to check balance: {interaction.user}")
+            await interaction.followup.send(
+                "Seems like we haven't seen you before. Run `/register` first."
+            )
+        else:
+            if DEBUG:
+                print(f"User checking balance: {interaction.user}")
+            balance = EXCHANGE.users[user_id].balance
+            embed = discord.Embed(color=discord.Color.blue())
+            embed.add_field(
+                name="💰 Cash Balance:", value=f"${balance:,.2f}", inline=True
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except Exception as e:
+        if DEBUG:
+            e = traceback.format_exc()
+        print(f"An unexpected error occurred: {e}")
+        await interaction.followup.send("❌ **An unexpected error occurred.**")
+        raise
+
+
+@tree.command(name="positions", description="Check your current holdings.")
+async def positions(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        try:
+            user_id = EXCHANGE.discord_user_ids[interaction.user.id]
+        except KeyError:
+            if DEBUG:
+                print(f"New user trying to check balance: {interaction.user}")
+            await interaction.followup.send(
+                "Seems like we haven't seen you before. Run `/register` first."
+            )
+        else:
+            user = EXCHANGE.users[user_id]
+            markets = EXCHANGE.markets
+            embed = discord.Embed(
+                title="Your Portfolio",
+                description=f"A summary for {user.user_name}.",
+                color=discord.Color.blue(),
+            )
+
+            cash_balance = float(user.balance)
+            embed.add_field(
+                name="💰 Cash Balance", value=f"${cash_balance:,.2f}", inline=False
+            )
+
+            total_market_value = 0
+            holdings = []
+            for market_id, positions in user.positions.items():
+                market = markets[market_id]
+                market_value = market.simulate_liquidation_proceeds(*positions)
+                holdings.append((market, positions, market_value))
+                total_market_value += market_value
+
+                # cost_basis = _round_cents(
+                #     h.get("userYesCost", 0.0) + h.get("userNoCost", 0.0)
+                # )
+                # h["pnl"] = pnl = _round_cents(h["market_value"] - cost_basis)
+                # h["pnl_percent"] = (
+                #     (pnl / cost_basis) * 100 if cost_basis != 0 else 0
+                # )
+
+            net_worth = cash_balance + total_market_value
+            embed.add_field(
+                name="📈 Market Value",
+                value=f"${total_market_value:,.2f}",
+                inline=False,
+            )
+            embed.add_field(
+                name="💼 Net Worth",
+                value=f"${net_worth:,.2f}",
+                inline=False,
+            )
+
+            if not holdings:
+                embed.add_field(
+                    name="📈 Share Holdings",
+                    value="You do not own any shares. Go buy some!.",
+                    inline=False,
+                )
+            else:
+                holdings.sort(key=lambda x: x[0].id)
+
+                for market, (no_positions, yes_positions), market_value in holdings:
+                    field_name = f"📊 {market.question} (#{market.id})"
+                    field_value = (
+                        f"*p(Yes) = `{market.yes_price:.2f}%` | Volume = `{market.volume}`*\n"
+                        f"Your Shares: `{yes_positions}` Yes / `{no_positions}` No\n"
+                        f"Market value  `${market_value:,.2f}`"
+                    )
+
+                    # if is_pnl_calculable:
+                    #     pnl = holding.get("pnl", 0.0)
+                    #     pnl_percent = holding.get("pnl_percent", 0)
+                    #     pnl_sign = "" if pnl >= 0 else "-"
+                    #     pct_pnl_sign = "+" if pnl >= 0 else ""
+                    #     field_value += f"\nUnrealized PnL: `{pnl_sign}${abs(pnl):,.2f} ({pct_pnl_sign}{pnl_percent:.2f}%)`"
+
+                    embed.add_field(name=field_name, value=field_value, inline=False)
+
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling Google Apps Script: {e}")
+        await interaction.followup.send(
+            "❌ **System Error:** Could not communicate with the backend service.",
+        )
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        await interaction.followup.send("❌ **An unexpected error occurred.**")
+
+
+@tree.command(
     name="trade", description="Buy or sell shares. Use a negative quantity to sell."
 )
 @app_commands.describe(
@@ -151,7 +293,7 @@ async def on_ready():
 async def trade(
     interaction: discord.Interaction,
     market_id: str,
-    share_type: ShareType,
+    share_type: str,
     quantity: int,
 ):
     await interaction.response.send_message(
@@ -277,120 +419,6 @@ async def trade(
         await interaction.edit_original_response(
             content="❌ **An unexpected error occurred.**"
         )
-
-
-@tree.command(
-    name="balance", description="Check your current balance and share holdings."
-)
-async def balance(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        params = {
-            "token": API_TOKEN,
-            "action": "getBalance",
-            "discordHandle": str(interaction.user),
-        }
-        response = requests.get(SCRIPT_URL, params=params)
-        response.raise_for_status()
-        response_data = response.json()
-
-        if response_data.get("ok"):
-            user_data = response_data["data"]
-            embed = discord.Embed(
-                title="Your Portfolio",
-                description=f"A summary for {interaction.user.mention}.",
-                color=discord.Color.blue(),
-            )
-
-            cash_balance = float(user_data["balance"])
-            embed.add_field(
-                name="💰 Cash Balance", value=f"${cash_balance:,.2f}", inline=False
-            )
-
-            holdings = user_data.get("holdings", []) or []
-            is_pnl_calculable = holdings and all(
-                "liquidity" in h and "userYesCost" in h and "userNoCost" in h
-                for h in holdings
-            )
-
-            if is_pnl_calculable:
-                total_market_value = 0
-                for h in holdings:
-                    h["market_value"] = simulate_liquidation_proceeds(
-                        h.get("pYes", 0.0),
-                        h.get("liquidity"),
-                        h.get("userYes", 0.0),
-                        h.get("userNo", 0.0),
-                    )
-                    cost_basis = _round_cents(
-                        h.get("userYesCost", 0.0) + h.get("userNoCost", 0.0)
-                    )
-                    h["pnl"] = pnl = _round_cents(h["market_value"] - cost_basis)
-                    h["pnl_percent"] = (
-                        (pnl / cost_basis) * 100 if cost_basis != 0 else 0
-                    )
-                    total_market_value += h["market_value"]
-
-                net_worth = _round_cents(cash_balance + total_market_value)
-                embed.add_field(
-                    name="📈 Market Value",
-                    value=f"${total_market_value:,.2f}",
-                    inline=False,
-                )
-                embed.add_field(
-                    name="💼 Net Worth",
-                    value=f"${net_worth:,.2f}",
-                    inline=False,
-                )
-
-            if not holdings:
-                embed.add_field(
-                    name="📈 Share Holdings",
-                    value="You do not own any shares.",
-                    inline=False,
-                )
-            else:
-                try:
-                    holdings.sort(key=lambda x: int(x["marketId"]))
-                except (ValueError, TypeError):
-                    holdings.sort(key=lambda x: x["marketId"])
-
-                for holding in holdings:
-                    field_name = f"📊 {holding['question']} (#{holding['marketId']})"
-                    field_value = (
-                        f"*p(Yes) = `{holding['pYes']:.2f}%` | Volume = `{int(holding['volume'])}`*\n"
-                        f"Your Shares: `{holding['userYes']}` Yes / `{holding['userNo']}` No"
-                    )
-
-                    if is_pnl_calculable:
-                        market_value = holding.get("market_value", 0.0)
-                        pnl = holding.get("pnl", 0.0)
-                        pnl_percent = holding.get("pnl_percent", 0)
-                        pnl_sign = "" if pnl >= 0 else "-"
-                        pct_pnl_sign = "+" if pnl >= 0 else ""
-                        field_value += f"\nMarket value: `${market_value:,.2f}`"
-                        field_value += f"\nUnrealized PnL: `{pnl_sign}${abs(pnl):,.2f} ({pct_pnl_sign}{pnl_percent:.2f}%)`"
-
-                    embed.add_field(name=field_name, value=field_value, inline=False)
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            error_message = response_data.get(
-                "error", "An unknown script error occurred."
-            )
-            await interaction.followup.send(
-                f"❌ **Could not fetch balance:** {error_message}"
-            )
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error calling Google Apps Script: {e}")
-        await interaction.followup.send(
-            "❌ **System Error:** Could not communicate with the backend service.",
-        )
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        await interaction.followup.send("❌ **An unexpected error occurred.**")
 
 
 # --- Run the bot ---
