@@ -8,6 +8,7 @@ from pprint import pprint
 
 from market.exchange import Ledger, Exchange
 from discord_bot.registration import start_registration_flow
+from discord_bot.market_description import create_market_embed
 
 
 # --- Configuration ---
@@ -15,8 +16,9 @@ load_dotenv()
 DEBUG = True
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID"))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-if not all([DISCORD_BOT_TOKEN]):
+if not all([DISCORD_BOT_TOKEN, GUILD_ID, CHANNEL_ID]):
     print("FATAL: Missing one or more required environment variables.")
     exit(1)
 
@@ -25,7 +27,8 @@ LEDGER = Ledger.from_json("data/ledger.json")
 EXCHANGE = Exchange.from_ledger(LEDGER)
 pprint(EXCHANGE.markets)
 pprint(EXCHANGE.users)
-pprint(EXCHANGE.discord_user_ids)
+pprint(f"{EXCHANGE.discord_user_ids=}")
+MARKET_TOPIC_IDS = {}
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
@@ -136,16 +139,38 @@ class ConfirmView(ui.View):
 # --- Bot Events ---
 @client.event
 async def on_ready():
-    if GUILD_ID:
-        guild = discord.Object(id=GUILD_ID)
-        tree.copy_global_to(guild=guild)
-        await tree.sync(guild=guild)
-        print(f"Synced commands to guild: {GUILD_ID}")
-    else:
-        await tree.sync()
-        print("Synced commands globally.")
+    guild = discord.Object(id=GUILD_ID)
+    tree.copy_global_to(guild=guild)
+    await tree.sync(guild=guild)
+    print(f"Synced commands to guild: {GUILD_ID}")
     print(f"Logged in as {client.user.name} ({client.user.id})")
-    print("------")
+
+    forum_channel = client.get_channel(CHANNEL_ID)
+    if not forum_channel:
+        print("Forum channel not found!")
+        return
+
+    # Get existing market threads
+    markets_with_threads = set()
+    for thread in forum_channel.threads:
+        try:
+            market_id = int(thread.name.split("#")[-1][:-1])
+            MARKET_TOPIC_IDS[thread.id] = market_id
+            markets_with_threads.add(market_id)
+        except (IndexError, ValueError):
+            continue
+
+    # Create threads for new markets
+    for market_id, market in sorted(EXCHANGE.markets.items()):
+        if market_id not in markets_with_threads:
+            market_embed = create_market_embed(market)
+            new_thread = await forum_channel.create_thread(
+                name=f"{market.question} (#{market.id})", embed=market_embed
+            )
+            MARKET_TOPIC_IDS[new_thread.id] = market_id
+            print(f"Created thread for market {market_id}")
+
+    pprint(f"{MARKET_TOPIC_IDS=}")
 
 
 # --- Slash Commands ---
@@ -316,18 +341,18 @@ async def trade(
     try:
         print(f"{interaction=}, {interaction.channel=}")
 
-        channel_name = interaction.channel.name
-        # Channels are foramtted Question... (#market_id)
         try:
-            market_id = int(channel_name.split("#")[-1][:-1])
-        except Exception:
+            market_id = MARKET_TOPIC_IDS[interaction.channel.id]
+        except KeyError:
             await interaction.followup.send(
                 content="❌ **Invalid location:** You can only trade inside a market topic."
             )
             return
 
         if market_id not in EXCHANGE.markets:
-            await interaction.followup.send(content="❌ **Could not find market:**")
+            await interaction.followup.send(
+                content="❌ **Could not find market in database:**"
+            )
             return
 
         if quantity == 0:
@@ -337,7 +362,16 @@ async def trade(
             return
 
         market = EXCHANGE.markets[market_id]
-        await interaction.followup.send(content=f"Trading market {market}")
+        old_price = market.yes_price
+        await interaction.followup.send(content=f"✅ **Trade successful:**")
+        await interaction.channel.send(
+            content=f"Someone traded {quantity} {'Yes' if yes_shares else 'No'} {'shares' if quantity > 1 else 'share'}. p(Yes): {old_price:.1f}% -> {market.yes_price:.1f}%"
+        )
+        starter_message = await interaction.channel.fetch_message(
+            interaction.channel.id
+        )
+        if starter_message:
+            await starter_message.edit(content="", embed=create_market_embed(market))
 
     except Exception as e:
         print(f"An unexpected error occurred in trade command: {e}")
