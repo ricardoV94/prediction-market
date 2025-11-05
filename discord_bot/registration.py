@@ -16,7 +16,7 @@ async def start_registration_flow(interaction, Itneraction, exchange: Exchange):
             print(f"Registering new user: {interaction.user}")
             view = RegistrationView(interaction, exchange=exchange)
             await interaction.followup.send(
-                "Were you already registered in the Excel sheet?",
+                "Were you already registered in the old Google Spreadsheet?",
                 view=view,
             )
 
@@ -70,7 +70,7 @@ class RegistrationView(ui.View):
         )
 
         await interaction.response.send_message(
-            "You are now registered. Go wild (with calibration)!", ephemeral=True
+            "✅ You are now registered. Go wild (with calibration)!", ephemeral=True
         )
 
 
@@ -112,7 +112,7 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
                     f"Failed to find user {old_id_or_username}. Could be missing are already registered"
                 )
                 await interaction.response.send_message(
-                    "We couldn't find anyone with that username or id.",
+                    "❌ Failed to find username or id in current database.",
                     ephemeral=True,
                 )
                 return
@@ -126,6 +126,6 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
         )
 
         await interaction.response.send_message(
-            f"Welcome back {old_user.user_name}. Go wild (with calibration)!",
+            f"✅ Welcome back {old_user.user_name}. Go wild (with calibration)!",
             ephemeral=True,
         )

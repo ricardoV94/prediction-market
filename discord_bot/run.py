@@ -14,7 +14,7 @@ from discord_bot.registration import start_registration_flow
 load_dotenv()
 DEBUG = True
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-GUILD_ID = os.getenv("GUILD_ID")
+GUILD_ID = int(os.getenv("GUILD_ID"))
 
 if not all([DISCORD_BOT_TOKEN]):
     print("FATAL: Missing one or more required environment variables.")
@@ -65,7 +65,7 @@ class ConfirmView(ui.View):
     async def confirm(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user.id != self.author.id:
             await interaction.response.send_message(
-                "You are not authorized to confirm this order.", ephemeral=True
+                "You are not authorized to confirm this order."
             )
             return
 
@@ -122,7 +122,7 @@ class ConfirmView(ui.View):
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user.id != self.author.id:
             await interaction.response.send_message(
-                "You are not authorized to cancel this order.", ephemeral=True
+                "You are not authorized to cancel this order."
             )
             return
 
@@ -154,12 +154,22 @@ async def on_ready():
     description="Register in the Prediction Market with the Discord bot.",
 )
 async def register(interaction: discord.Interaction):
+    if interaction.guild_id != GUILD_ID:
+        await interaction.response.send_message(
+            "This bot cannot be used on this server.", ephemeral=True
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     await start_registration_flow(interaction, EXCHANGE)
 
 
 @tree.command(name="balance", description="Check your current balance.")
 async def balance(interaction: discord.Interaction):
+    if interaction.guild_id != GUILD_ID:
+        await interaction.response.send_message(
+            "This bot cannot be used on this server.", ephemeral=True
+        )
+        return
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -171,6 +181,7 @@ async def balance(interaction: discord.Interaction):
             await interaction.followup.send(
                 "Seems like we haven't seen you before. Run `/register` first."
             )
+            return
         else:
             if DEBUG:
                 print(f"User checking balance: {interaction.user}")
@@ -179,7 +190,7 @@ async def balance(interaction: discord.Interaction):
             embed.add_field(
                 name="💰 Cash Balance:", value=f"${balance:,.2f}", inline=True
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed)
 
     except Exception as e:
         if DEBUG:
@@ -191,6 +202,11 @@ async def balance(interaction: discord.Interaction):
 
 @tree.command(name="positions", description="Check your current holdings.")
 async def positions(interaction: discord.Interaction):
+    if interaction.guild_id != GUILD_ID:
+        await interaction.response.send_message(
+            "This bot cannot be used on this server.", ephemeral=True
+        )
+        return
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -202,223 +218,269 @@ async def positions(interaction: discord.Interaction):
             await interaction.followup.send(
                 "Seems like we haven't seen you before. Run `/register` first."
             )
-        else:
-            user = EXCHANGE.users[user_id]
-            markets = EXCHANGE.markets
-            embed = discord.Embed(
-                title="Your Portfolio",
-                description=f"A summary for {user.user_name}.",
-                color=discord.Color.blue(),
-            )
+            return
 
-            cash_balance = float(user.balance)
-            embed.add_field(
-                name="💰 Cash Balance", value=f"${cash_balance:,.2f}", inline=False
-            )
-
-            total_market_value = 0
-            holdings = []
-            for market_id, positions in user.positions.items():
-                market = markets[market_id]
-                market_value = market.simulate_liquidation_proceeds(*positions)
-                holdings.append((market, positions, market_value))
-                total_market_value += market_value
-
-                # cost_basis = _round_cents(
-                #     h.get("userYesCost", 0.0) + h.get("userNoCost", 0.0)
-                # )
-                # h["pnl"] = pnl = _round_cents(h["market_value"] - cost_basis)
-                # h["pnl_percent"] = (
-                #     (pnl / cost_basis) * 100 if cost_basis != 0 else 0
-                # )
-
-            net_worth = cash_balance + total_market_value
-            embed.add_field(
-                name="📈 Market Value",
-                value=f"${total_market_value:,.2f}",
-                inline=False,
-            )
-            embed.add_field(
-                name="💼 Net Worth",
-                value=f"${net_worth:,.2f}",
-                inline=False,
-            )
-
-            if not holdings:
-                embed.add_field(
-                    name="📈 Share Holdings",
-                    value="You do not own any shares. Go buy some!.",
-                    inline=False,
-                )
-            else:
-                holdings.sort(key=lambda x: x[0].id)
-
-                for market, (no_positions, yes_positions), market_value in holdings:
-                    field_name = f"📊 {market.question} (#{market.id})"
-                    field_value = (
-                        f"*p(Yes) = `{market.yes_price:.2f}%` | Volume = `{market.volume}`*\n"
-                        f"Your Shares: `{yes_positions}` Yes / `{no_positions}` No\n"
-                        f"Market value  `${market_value:,.2f}`"
-                    )
-
-                    # if is_pnl_calculable:
-                    #     pnl = holding.get("pnl", 0.0)
-                    #     pnl_percent = holding.get("pnl_percent", 0)
-                    #     pnl_sign = "" if pnl >= 0 else "-"
-                    #     pct_pnl_sign = "+" if pnl >= 0 else ""
-                    #     field_value += f"\nUnrealized PnL: `{pnl_sign}${abs(pnl):,.2f} ({pct_pnl_sign}{pnl_percent:.2f}%)`"
-
-                    embed.add_field(name=field_name, value=field_value, inline=False)
-
-                await interaction.followup.send(embed=embed, ephemeral=True)
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error calling Google Apps Script: {e}")
-        await interaction.followup.send(
-            "❌ **System Error:** Could not communicate with the backend service.",
+        user = EXCHANGE.users[user_id]
+        markets = EXCHANGE.markets
+        embed = discord.Embed(
+            title="Your Portfolio",
+            description=f"A summary for {user.user_name}.",
+            color=discord.Color.blue(),
         )
+
+        cash_balance = float(user.balance)
+        embed.add_field(
+            name="💰 Cash Balance", value=f"${cash_balance:,.2f}", inline=False
+        )
+
+        total_market_value = 0
+        holdings = []
+        for market_id, positions in user.positions.items():
+            market = markets[market_id]
+            market_value = market.simulate_liquidation_proceeds(*positions)
+            holdings.append((market, positions, market_value))
+            total_market_value += market_value
+
+            # cost_basis = _round_cents(
+            #     h.get("userYesCost", 0.0) + h.get("userNoCost", 0.0)
+            # )
+            # h["pnl"] = pnl = _round_cents(h["market_value"] - cost_basis)
+            # h["pnl_percent"] = (
+            #     (pnl / cost_basis) * 100 if cost_basis != 0 else 0
+            # )
+
+        net_worth = cash_balance + total_market_value
+        embed.add_field(
+            name="📈 Market Value",
+            value=f"${total_market_value:,.2f}",
+            inline=False,
+        )
+        embed.add_field(
+            name="💼 Net Worth",
+            value=f"${net_worth:,.2f}",
+            inline=False,
+        )
+
+        if not holdings:
+            embed.add_field(
+                name="📈 Share Holdings",
+                value="You do not own any shares. Go buy some!.",
+                inline=False,
+            )
+        else:
+            holdings.sort(key=lambda x: x[0].id)
+
+            for market, (no_positions, yes_positions), market_value in holdings:
+                field_name = f"📊 {market.question} (#{market.id})"
+                field_value = (
+                    f"*p(Yes) = `{market.yes_price:.2f}%` | Volume = `{market.volume}`*\n"
+                    f"Your Shares: `{yes_positions}` Yes / `{no_positions}` No\n"
+                    f"Market value  `${market_value:,.2f}`"
+                )
+
+                # if is_pnl_calculable:
+                #     pnl = holding.get("pnl", 0.0)
+                #     pnl_percent = holding.get("pnl_percent", 0)
+                #     pnl_sign = "" if pnl >= 0 else "-"
+                #     pct_pnl_sign = "+" if pnl >= 0 else ""
+                #     field_value += f"\nUnrealized PnL: `{pnl_sign}${abs(pnl):,.2f} ({pct_pnl_sign}{pnl_percent:.2f}%)`"
+
+                embed.add_field(name=field_name, value=field_value, inline=False)
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         await interaction.followup.send("❌ **An unexpected error occurred.**")
 
 
 @tree.command(
-    name="trade", description="Buy or sell shares. Use a negative quantity to sell."
+    name="trade", description="Buy shares in this market. Use negative number to sell"
 )
 @app_commands.describe(
-    market_id="The ID of the market.",
-    share_type="The type of share.",
-    quantity="Number of shares to trade. Positive to buy, negative to sell.",
+    yes_shares="Yes shares",
+    quantity="Number of shares to buy.",
 )
 async def trade(
     interaction: discord.Interaction,
-    market_id: str,
-    share_type: str,
+    yes_shares: bool,
     quantity: int,
 ):
-    await interaction.response.send_message(
-        "⏳ Retrieving trade information...", ephemeral=True
-    )
-
-    if quantity == 0:
-        await interaction.edit_original_response(
-            content="❌ **Invalid Quantity:** Please enter a non-zero number."
+    if interaction.guild_id != GUILD_ID:
+        await interaction.response.send_message(
+            "This bot cannot be used on this server.", ephemeral=True
         )
         return
+    await interaction.response.defer(ephemeral=True)
 
     try:
-        # 1. Get trade preview data
-        params = {
-            "action": "getTradePreview",
-            "discordHandle": str(interaction.user),
-            "marketId": market_id,
-            "shareType": share_type.value,
-            "quantity": quantity,
-        }
-        print(f"Requesting trade preview with params: {params}")
-        response = requests.get(SCRIPT_URL, params=params | {"token": API_TOKEN})
-        print(f"Preview response status: {response.status_code}")
-        if response.status_code != 200:
-            print(f"Preview response text: {response.text}")
-        response.raise_for_status()
-        preview_response = response.json()
+        print(f"{interaction=}, {interaction.channel=}")
 
-        if not preview_response.get("ok"):
-            error = preview_response.get("error", "Failed to retrieve trade preview.")
-            await interaction.edit_original_response(content=f"❌ **Error:** {error}")
+        channel_name = interaction.channel.name
+        # Channels are foramtted Question... (#market_id)
+        try:
+            market_id = int(channel_name.split("#")[-1][:-1])
+        except Exception:
+            await interaction.followup.send(
+                content="❌ **Invalid location:** You can only trade inside a market topic."
+            )
             return
 
-        data = preview_response["data"]
-        user = data["user"]
-        market = data["market"]
-        trade = data["trade"]
-        simulation = data["simulation"]
-        holdings = data["userHoldings"]
+        if market_id not in EXCHANGE.markets:
+            await interaction.followup.send(content="❌ **Could not find market:**")
+            return
 
-        # 2. Create detailed embed
-        action = "Buy" if quantity > 0 else "Sell"
-        abs_quantity = abs(quantity)
-        cost_or_proceeds = "Cost" if quantity > 0 else "Proceeds"
+        if quantity == 0:
+            await interaction.followup.send(
+                content="✅ **Traded zero shares:** To the mind that is still, the whole universe surrenders."
+            )
+            return
 
-        long_desc = market.get("long_description")
-        embed = discord.Embed(
-            title=f"Order Preview: {market['description']}",
-            description=f"Detailed criteria: *{long_desc}*" if long_desc else None,
-            color=discord.Color.blue(),
-        )
-        embed.set_author(name=f"Market #{market['id']} | Status: {market['status']}")
+        market = EXCHANGE.markets[market_id]
+        await interaction.followup.send(content=f"Trading market {market}")
 
-        # Market Info
-        embed.add_field(
-            name="Current Market Stats",
-            value=(
-                f"**Current prices:** Yes: $`{market['pYes']:.2f}` | No: $`{market['pNo']:.2f}`\n"
-                f"**Volume:** `{int(market.get('volume', 0))}`"
-            ),
-            inline=False,
-        )
-
-        # User Info
-        embed.add_field(
-            name="Your Position",
-            value=(
-                f"**Balance:** `${user['balance']:,.2f}`\n"
-                f"**Shares:** Yes: `{holdings['yesShares']}` | No: `{holdings['noShares']}`"
-            ),
-            inline=False,
-        )
-
-        # Trade Info
-        embed.add_field(
-            name="Proposed Trade",
-            value=(
-                f"**Action:** {action} `{abs_quantity}` **{trade['shareType']}** shares\n"
-                f"**{cost_or_proceeds}:** `${abs(trade['cost']):,.2f}`"
-            ),
-            inline=False,
-        )
-
-        # Outcome Info
-        embed.add_field(
-            name="Projected Outcome",
-            value=(
-                f"**New Balance:** `${simulation['newBalance']:,.2f}`\n"
-                f"**New Prices:** Yes: $`{simulation['newPYes']:.2f}` | No: $`{simulation['newPNo']:.2f}`"
-            ),
-            inline=False,
-        )
-
-        embed.set_footer(
-            text="Please confirm your order. This will expire in 3 minutes."
-        )
-
-        # 3. Send confirmation message
-        view = ConfirmView(
-            author=interaction.user,
-            market_id=market_id,
-            share_type=share_type,
-            quantity=quantity,
-            cost=trade["cost"],
-            question=market["description"],
-            current_balance=user["balance"],
-            user_id=user["id"],
-        )
-
-        message = await interaction.edit_original_response(
-            content="", embed=embed, view=view
-        )
-        view.message = message
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error calling Google Apps Script: {e}")
-        await interaction.edit_original_response(
-            content="❌ **System Error:** Could not communicate with the backend service."
-        )
     except Exception as e:
         print(f"An unexpected error occurred in trade command: {e}")
-        await interaction.edit_original_response(
-            content="❌ **An unexpected error occurred.**"
-        )
+        await interaction.followup.send(content="❌ **An unexpected error occurred.**")
+
+
+# @tree.command(
+#     name="trade", description="Buy or sell shares. Use a negative quantity to sell."
+# )
+# @app_commands.describe(
+#     market_id="The ID of the market.",
+#     share_type="The type of share.",
+#     quantity="Number of shares to trade. Positive to buy, negative to sell.",
+# )
+# async def trade(
+#     interaction: discord.Interaction,
+#     market_id: str,
+#     share_type: str,
+#     quantity: int,
+# ):
+#     await interaction.response.send_message(
+#         "⏳ Retrieving trade information...", ephemeral=True
+#     )
+
+#     if quantity == 0:
+#         await interaction.edit_original_response(
+#             content="❌ **Invalid Quantity:** Please enter a non-zero number."
+#         )
+#         return
+
+#     try:
+#         # 1. Get trade preview data
+#         params = {
+#             "action": "getTradePreview",
+#             "discordHandle": str(interaction.user),
+#             "marketId": market_id,
+#             "shareType": share_type.value,
+#             "quantity": quantity,
+#         }
+#         print(f"Requesting trade preview with params: {params}")
+#         response = requests.get(SCRIPT_URL, params=params | {"token": API_TOKEN})
+#         print(f"Preview response status: {response.status_code}")
+#         if response.status_code != 200:
+#             print(f"Preview response text: {response.text}")
+#         response.raise_for_status()
+#         preview_response = response.json()
+
+#         if not preview_response.get("ok"):
+#             error = preview_response.get("error", "Failed to retrieve trade preview.")
+#             await interaction.edit_original_response(content=f"❌ **Error:** {error}")
+#             return
+
+#         data = preview_response["data"]
+#         user = data["user"]
+#         market = data["market"]
+#         trade = data["trade"]
+#         simulation = data["simulation"]
+#         holdings = data["userHoldings"]
+
+#         # 2. Create detailed embed
+#         action = "Buy" if quantity > 0 else "Sell"
+#         abs_quantity = abs(quantity)
+#         cost_or_proceeds = "Cost" if quantity > 0 else "Proceeds"
+
+#         long_desc = market.get("long_description")
+#         embed = discord.Embed(
+#             title=f"Order Preview: {market['description']}",
+#             description=f"Detailed criteria: *{long_desc}*" if long_desc else None,
+#             color=discord.Color.blue(),
+#         )
+#         embed.set_author(name=f"Market #{market['id']} | Status: {market['status']}")
+
+#         # Market Info
+#         embed.add_field(
+#             name="Current Market Stats",
+#             value=(
+#                 f"**Current prices:** Yes: $`{market['pYes']:.2f}` | No: $`{market['pNo']:.2f}`\n"
+#                 f"**Volume:** `{int(market.get('volume', 0))}`"
+#             ),
+#             inline=False,
+#         )
+
+#         # User Info
+#         embed.add_field(
+#             name="Your Position",
+#             value=(
+#                 f"**Balance:** `${user['balance']:,.2f}`\n"
+#                 f"**Shares:** Yes: `{holdings['yesShares']}` | No: `{holdings['noShares']}`"
+#             ),
+#             inline=False,
+#         )
+
+#         # Trade Info
+#         embed.add_field(
+#             name="Proposed Trade",
+#             value=(
+#                 f"**Action:** {action} `{abs_quantity}` **{trade['shareType']}** shares\n"
+#                 f"**{cost_or_proceeds}:** `${abs(trade['cost']):,.2f}`"
+#             ),
+#             inline=False,
+#         )
+
+#         # Outcome Info
+#         embed.add_field(
+#             name="Projected Outcome",
+#             value=(
+#                 f"**New Balance:** `${simulation['newBalance']:,.2f}`\n"
+#                 f"**New Prices:** Yes: $`{simulation['newPYes']:.2f}` | No: $`{simulation['newPNo']:.2f}`"
+#             ),
+#             inline=False,
+#         )
+
+#         embed.set_footer(
+#             text="Please confirm your order. This will expire in 3 minutes."
+#         )
+
+#         # 3. Send confirmation message
+#         view = ConfirmView(
+#             author=interaction.user,
+#             market_id=market_id,
+#             share_type=share_type,
+#             quantity=quantity,
+#             cost=trade["cost"],
+#             question=market["description"],
+#             current_balance=user["balance"],
+#             user_id=user["id"],
+#         )
+
+#         message = await interaction.edit_original_response(
+#             content="", embed=embed, view=view
+#         )
+#         view.message = message
+
+#     except requests.exceptions.RequestException as e:
+#         print(f"Error calling Google Apps Script: {e}")
+#         await interaction.edit_original_response(
+#             content="❌ **System Error:** Could not communicate with the backend service."
+#         )
+#     except Exception as e:
+#         print(f"An unexpected error occurred in trade command: {e}")
+#         await interaction.edit_original_response(
+#             content="❌ **An unexpected error occurred.**"
+#         )
 
 
 # --- Run the bot ---
