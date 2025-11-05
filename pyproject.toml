@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "market"
+version = "0.1.0"
+authors = [
+  { name="Ricardo Vieira", email="ricardo.vieira1994@gmail.com" },
+]
+description = "A prediction market project with a Discord bot integration."
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "discord.py==2.6.4",
+    "requests==2.32.5",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/prediction-market"
+"Bug Tracker" = "https://github.com/yourusername/prediction-market/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
