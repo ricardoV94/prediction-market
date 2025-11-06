@@ -5,7 +5,7 @@ OLD_SIGNUP_BONUS = 5_000.0
 NEW_SIGNUP_BALANCE = 10_000.0
 
 
-async def start_registration_flow(interaction, Itneraction, exchange: Exchange):
+async def start_registration_flow(interaction: Interaction, exchange: Exchange):
     try:
         if interaction.user.id in exchange.discord_user_ids:
             print(
@@ -64,7 +64,7 @@ class RegistrationView(ui.View):
         for item in self.children:
             item.disabled = True
 
-        new_user_id = (self.exchange.users) + 1
+        new_user_id = len(self.exchange.users) + 1
 
         self.exchange.ledger.update_user(
             author=interaction.user,
@@ -86,7 +86,7 @@ class RegistrationView(ui.View):
         await interaction.response.send_message(
             (
                 "✅ You are now registered. "
-                f"You have been granted an initial balance of ${NEW_SIGNUP_BALANCE}. "
+                f"You have been granted an initial balance of ${int(NEW_SIGNUP_BALANCE):,}. "
                 "Go wild (with calibration)!"
             ),
             ephemeral=True,
@@ -156,7 +156,7 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
         await interaction.response.send_message(
             (
                 f"✅ Welcome back {old_user.user_name}. All your positions are restored."
-                f"You have been granted an additional bonus of ${OLD_SIGNUP_BONUS}. "
+                f"You have been granted an additional bonus of ${int(OLD_SIGNUP_BONUS):,}. "
                 "Go wild (with calibration)!"
             ),
             ephemeral=True,

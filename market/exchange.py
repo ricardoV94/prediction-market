@@ -259,7 +259,7 @@ class Exchange:
                         self._discord_user_ids[discord_id] = user_id
                 case "balance_update":
                     user_id = info["user_id"]
-                    new_balance = entry["new_balance"]
+                    new_balance = info["new_balance"]
                     self._users[user_id].balance = new_balance
                 case _:
                     raise NotImplementedError(

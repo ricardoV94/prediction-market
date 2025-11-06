@@ -4,8 +4,12 @@ import discord
 from discord import app_commands, ui
 import requests
 from dotenv import load_dotenv
-from pprint import pprint
+from pprint import pformat
 from pathlib import Path
+import logging
+
+logging.setLevel = logging.INFO
+
 
 from market.exchange import Ledger, Exchange
 from discord_bot.registration import start_registration_flow
@@ -20,7 +24,7 @@ GUILD_ID = int(os.getenv("GUILD_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 if not all([DISCORD_BOT_TOKEN, GUILD_ID, CHANNEL_ID]):
-    print("FATAL: Missing one or more required environment variables.")
+    logging.error("FATAL: Missing one or more required environment variables.")
     exit(1)
 
 # --- Setup ---
@@ -29,9 +33,9 @@ ledger_path.parent.mkdir(parents=True, exist_ok=True)
 ledger_path.touch(exist_ok=True)
 LEDGER = Ledger.from_json(ledger_path)
 EXCHANGE = Exchange.from_ledger(LEDGER)
-pprint(EXCHANGE.markets)
-pprint(EXCHANGE.users)
-pprint(f"{EXCHANGE.discord_user_ids=}")
+logging.info(pformat(EXCHANGE.markets))
+logging.info(pformat(EXCHANGE.users))
+logging.info(pformat(f"{EXCHANGE.discord_user_ids=}"))
 MARKET_TOPIC_IDS = {}
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -146,8 +150,8 @@ async def on_ready():
     guild = discord.Object(id=GUILD_ID)
     tree.copy_global_to(guild=guild)
     await tree.sync(guild=guild)
-    print(f"Synced commands to guild: {GUILD_ID}")
-    print(f"Logged in as {client.user.name} ({client.user.id})")
+    logging.info(f"Synced commands to guild: {GUILD_ID}")
+    logging.info(f"Logged in as {client.user.name} ({client.user.id})")
 
     forum_channel = client.get_channel(CHANNEL_ID)
     if not forum_channel:
@@ -155,12 +159,18 @@ async def on_ready():
         return
 
     # Get existing market threads
+    exchange_markets = EXCHANGE.markets
     markets_with_threads = set()
     for thread in forum_channel.threads:
         try:
             market_id = int(thread.name.split("#")[-1][:-1])
-            MARKET_TOPIC_IDS[thread.id] = market_id
-            markets_with_threads.add(market_id)
+            if market_id in exchange_markets:
+                MARKET_TOPIC_IDS[thread.id] = market_id
+                markets_with_threads.add(market_id)
+            else:
+                logging.warning(
+                    f"Sync error: found a market thread with id {market_id} that is not in the Exchange"
+                )
         except (IndexError, ValueError):
             continue
 
@@ -172,9 +182,9 @@ async def on_ready():
                 name=f"{market.question} (#{market.id})", embed=market_embed
             )
             MARKET_TOPIC_IDS[new_thread.id] = market_id
-            print(f"Created thread for market {market_id}")
+            logging.info(f"Created thread for market {market_id}")
 
-    pprint(f"{MARKET_TOPIC_IDS=}")
+    logging.info(f"{MARKET_TOPIC_IDS=}")
 
 
 # --- Slash Commands ---
@@ -212,8 +222,7 @@ async def balance(interaction: discord.Interaction):
             )
             return
         else:
-            if DEBUG:
-                print(f"User checking balance: {interaction.user}")
+            logging.debug(f"User checking balance: {interaction.user}")
             balance = EXCHANGE.users[user_id].balance
             embed = discord.Embed(color=discord.Color.blue())
             embed.add_field(
@@ -222,9 +231,8 @@ async def balance(interaction: discord.Interaction):
             await interaction.followup.send(embed=embed)
 
     except Exception as e:
-        if DEBUG:
-            e = traceback.format_exc()
-        print(f"An unexpected error occurred: {e}")
+        logging.debug(traceback.format_exc())
+        logging.error(f"An unexpected error occurred: {e}")
         await interaction.followup.send("❌ **An unexpected error occurred.**")
         raise
 
@@ -242,8 +250,7 @@ async def positions(interaction: discord.Interaction):
         try:
             user_id = EXCHANGE.discord_user_ids[interaction.user.id]
         except KeyError:
-            if DEBUG:
-                print(f"New user trying to check balance: {interaction.user}")
+            logging.debug(f"New user trying to check balance: {interaction.user}")
             await interaction.followup.send(
                 "Seems like we haven't seen you before. Run `/register` first."
             )
@@ -293,7 +300,7 @@ async def positions(interaction: discord.Interaction):
         if not holdings:
             embed.add_field(
                 name="📈 Share Holdings",
-                value="You do not own any shares. Go buy some!.",
+                value="You do not own any shares. Go buy some!",
                 inline=False,
             )
         else:
@@ -316,7 +323,7 @@ async def positions(interaction: discord.Interaction):
 
                 embed.add_field(name=field_name, value=field_value, inline=False)
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
@@ -343,8 +350,6 @@ async def trade(
     await interaction.response.defer(ephemeral=True)
 
     try:
-        print(f"{interaction=}, {interaction.channel=}")
-
         try:
             market_id = MARKET_TOPIC_IDS[interaction.channel.id]
         except KeyError:
@@ -378,7 +383,9 @@ async def trade(
             await starter_message.edit(content="", embed=create_market_embed(market))
 
     except Exception as e:
-        print(f"An unexpected error occurred in trade command: {e}")
+        logging.error(
+            f"An unexpected error occurred in trade command: {traceback.format_exc()}"
+        )
         await interaction.followup.send(content="❌ **An unexpected error occurred.**")
 
 
