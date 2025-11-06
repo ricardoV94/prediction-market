@@ -18,6 +18,56 @@ from discord_bot.market_description import create_market_embed
 LOGGER = logging.getLogger(__name__)
 
 
+def require_author(func: Callable[["ConfirmView", Interaction, ui.Button], Coroutine]):
+    """
+    Decorator that checks if the interaction user is the author of the view.
+    """
+
+    async def wrapper(self: "ConfirmView", interaction: Interaction, button: ui.Button):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message(
+                "You are not authorized to do this.", ephemeral=True
+            )
+            return
+        await func(self, interaction, button)
+
+    return wrapper
+
+
+class ConfirmView(ui.View):
+    def __init__(self, author: discordUser, on_confirm: Callable, invalid_trade: bool):
+        super().__init__(timeout=180)  # 3-minute timeout
+        self.author = author
+        self.on_confirm = on_confirm
+        self.message: InteractionMessage | None = None
+        if invalid_trade:
+            self.confirm.disabled = True
+
+    async def disable_buttons(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def on_timeout(self):
+        if self.message:
+            self.disable_buttons()
+            await self.message.edit(content="⌛️ **Order Timed Out**", view=self)
+
+    @ui.button(label="Confirm", style=ButtonStyle.green)
+    @require_author
+    async def confirm(self, interaction: Interaction, button: ui.Button):
+        self.disable_buttons()
+        await interaction.response.edit_message(view=self)
+        self.on_confirm()
+
+    @ui.button(label="Cancel", style=ButtonStyle.red)
+    @require_author
+    async def cancel(self, interaction: Interaction, button: ui.Button):
+        self.disable_buttons()
+        await interaction.response.edit_message(
+            content="❌ **Order Cancelled.**", view=self, embed=None
+        )
+
+
 async def start_trade_flow(
     interaction: Interaction,
     is_yes_shares: bool,
@@ -173,53 +223,3 @@ async def start_trade_flow(
             f"An unexpected error occurred in trade command: {traceback.format_exc()}"
         )
         await interaction.followup.send(content="❌ **An unexpected error occurred.**")
-
-
-class ConfirmView(ui.View):
-    def __init__(self, author: discordUser, on_confirm: Callable, invalid_trade: bool):
-        super().__init__(timeout=180)  # 3-minute timeout
-        self.author = author
-        self.on_confirm = on_confirm
-        self.message: InteractionMessage | None = None
-        if invalid_trade:
-            self.confirm.disabled = True
-
-    async def on_timeout(self):
-        if self.message:
-            for item in self.children:
-                item.disabled = True
-            await self.message.edit(content="⌛️ **Order Timed Out**", view=self)
-
-    @ui.button(label="Confirm", style=ButtonStyle.green)
-    async def confirm(self, interaction: Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to confirm this order."
-            )
-            return
-
-        # Disable buttons and keep original message
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
-
-        # Send a new message for status updates
-        status_message = await interaction.followup.send(
-            "⏳ Executing trade...", wait=True
-        )
-
-        self.on_confirm()
-
-    @ui.button(label="Cancel", style=ButtonStyle.red)
-    async def cancel(self, interaction: Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to cancel this order."
-            )
-            return
-
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(
-            content="❌ **Order Cancelled.**", view=self, embed=None
-        )
