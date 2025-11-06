@@ -106,7 +106,6 @@ class ConfirmView(ui.View):
                 "quantity": self.quantity,
                 "userEmail": f"{interaction.user.name}@{interaction.user.id}",
             }
-            print(f"Requesting trade execution with params: {trade_payload}")
             response = requests.post(
                 SCRIPT_URL, json=trade_payload | {"token": API_TOKEN}
             )
@@ -162,7 +161,7 @@ async def on_ready():
 
     forum_channel = client.get_channel(CHANNEL_ID)
     if not forum_channel:
-        print("Forum channel not found!")
+        LOGGER.critical("Forum channel not found!")
         return
 
     # Get existing market threads
@@ -206,7 +205,7 @@ async def register(interaction: discord.Interaction):
         )
         return
     await interaction.response.defer(ephemeral=True)
-    await start_registration_flow(interaction, EXCHANGE)
+    await start_registration_flow(interaction, EXCHANGE, LOGGER)
 
 
 @tree.command(name="balance", description="Check your current balance.")
@@ -237,8 +236,7 @@ async def balance(interaction: discord.Interaction):
             await interaction.followup.send(embed=embed)
 
     except Exception as e:
-        LOGGER.debug(traceback.format_exc())
-        LOGGER.error(f"An unexpected error occurred: {e}")
+        LOGGER.error(f"An unexpected error occurred: {traceback.format_exc()}")
         await interaction.followup.send("❌ **An unexpected error occurred.**")
         raise
 
@@ -255,8 +253,9 @@ async def positions(interaction: discord.Interaction):
     try:
         try:
             user_id = EXCHANGE.discord_user_ids[interaction.user.id]
+            LOGGER.debug(f"User trying to check positions: {interaction.user}")
         except KeyError:
-            LOGGER.debug(f"New user trying to check balance: {interaction.user}")
+            LOGGER.debug(f"New user trying to check positions: {interaction.user}")
             await interaction.followup.send(
                 "Seems like we haven't seen you before. Run `/register` first."
             )
@@ -332,7 +331,7 @@ async def positions(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {traceback.format_exc()}")
         await interaction.followup.send("❌ **An unexpected error occurred.**")
 
 

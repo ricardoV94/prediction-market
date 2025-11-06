@@ -1,3 +1,6 @@
+import logging
+import traceback
+
 from market.exchange import Exchange
 from discord import ui, Interaction, InteractionMessage, ButtonStyle
 
@@ -5,10 +8,12 @@ OLD_SIGNUP_BONUS = 5_000.0
 NEW_SIGNUP_BALANCE = 10_000.0
 
 
-async def start_registration_flow(interaction: Interaction, exchange: Exchange):
+async def start_registration_flow(
+    interaction: Interaction, exchange: Exchange, logger: logging.Logger
+):
     try:
         if interaction.user.id in exchange.discord_user_ids:
-            print(
+            logger.debug(
                 f"Registered user tried to register again: {interaction.user} with id {interaction.user.id}"
             )
             await interaction.followup.send(
@@ -16,24 +21,27 @@ async def start_registration_flow(interaction: Interaction, exchange: Exchange):
                 "Use `/balance`, or `/positions` to check your status."
             )
         else:
-            print(f"Registering new user: {interaction.user}")
-            view = RegistrationView(interaction, exchange=exchange)
+            logger.info(f"Registering new user: {interaction.user}")
+            view = RegistrationView(interaction, exchange=exchange, logger=logger)
             await interaction.followup.send(
                 "Were you already registered in the old Google Spreadsheet?",
                 view=view,
             )
 
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {traceback.format_exc()}")
         await interaction.followup.send("❌ **An unexpected error occurred.**")
 
 
 class RegistrationView(ui.View):
-    def __init__(self, interaction: Interaction, exchange: Exchange):
+    def __init__(
+        self, interaction: Interaction, exchange: Exchange, logger: logging.Logger
+    ):
         super().__init__(timeout=180)  # 3-minute timeout
         self.author = interaction.user
         self.message: InteractionMessage | None = None
         self.exchange = exchange
+        self.logger = logger
 
     async def on_timeout(self):
         if self.message:
@@ -50,7 +58,7 @@ class RegistrationView(ui.View):
             return
 
         await interaction.response.send_modal(
-            SpreadSheetRegistrationModel(exchange=self.exchange)
+            SpreadSheetRegistrationModel(exchange=self.exchange, logger=self.logger)
         )
 
     @ui.button(label="No", style=ButtonStyle.red)
@@ -99,14 +107,15 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
         required=True,
     )
 
-    def __init__(self, exchange: Exchange):
+    def __init__(self, exchange: Exchange, logger: logging.Logger):
         super().__init__()
         self.exchange = exchange
+        self.logger = logger
 
     async def on_submit(self, interaction: Interaction):
         old_id_or_username = self.id_text_field.value
         current_users = self.exchange.users
-        print(f"Trying to find old user {old_id_or_username}")
+        self.logger.debug(f"Trying to find old user {old_id_or_username}")
         try:
             old_id = int(old_id_or_username.strip())
         except Exception:
@@ -127,7 +136,7 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
                 if old_user.user_name.lower() == old_username:
                     break  # match
             else:  # no-break
-                print(
+                self.logger.info(
                     f"Failed to find user {old_id_or_username}. Could be missing are already registered"
                 )
                 await interaction.response.send_message(
