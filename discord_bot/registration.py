@@ -1,6 +1,9 @@
 from market.exchange import Exchange
 from discord import ui, Interaction, InteractionMessage, ButtonStyle
 
+OLD_SIGNUP_BONUS = 5_000.0
+NEW_SIGNUP_BALANCE = 10_000.0
+
 
 async def start_registration_flow(interaction, Itneraction, exchange: Exchange):
     try:
@@ -61,16 +64,32 @@ class RegistrationView(ui.View):
         for item in self.children:
             item.disabled = True
 
+        new_user_id = (self.exchange.users) + 1
+
         self.exchange.ledger.update_user(
             author=interaction.user,
-            user_id=max(self.exchange.users) + 1,
+            user_id=new_user_id,
             user_name=self.author.name,
             discord_id=interaction.user.id,
             reason="registered on discord",
         )
 
+        self.exchange.ledger.update_balance(
+            author=interaction.user,
+            user_id=new_user_id,
+            delta=NEW_SIGNUP_BALANCE,
+            old_balance=0.0,
+            new_balance=NEW_SIGNUP_BALANCE,
+            reason="initial balance",
+        )
+
         await interaction.response.send_message(
-            "✅ You are now registered. Go wild (with calibration)!", ephemeral=True
+            (
+                "✅ You are now registered. "
+                f"You have been granted an initial balance of ${NEW_SIGNUP_BALANCE}. "
+                "Go wild (with calibration)!"
+            ),
+            ephemeral=True,
         )
 
 
@@ -125,7 +144,20 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
             reason="re-registered on discord",
         )
 
+        self.exchange.ledger.update_balance(
+            author=interaction.user,
+            user_id=old_user.id,
+            delta=OLD_SIGNUP_BONUS,
+            old_balance=old_user.balance,
+            new_balance=old_user.balance + OLD_SIGNUP_BONUS,
+            reason="re-registered bonus",
+        )
+
         await interaction.response.send_message(
-            f"✅ Welcome back {old_user.user_name}. Go wild (with calibration)!",
+            (
+                f"✅ Welcome back {old_user.user_name}. All your positions are restored."
+                f"You have been granted an additional bonus of ${OLD_SIGNUP_BONUS}. "
+                "Go wild (with calibration)!"
+            ),
             ephemeral=True,
         )

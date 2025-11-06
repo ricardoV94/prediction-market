@@ -13,7 +13,7 @@ class Ledger:
     date_format = "%Y-%m-%d"
 
     @classmethod
-    def from_json(cls, file: str):
+    def from_json(cls, file: str | Path):
         file = Path(file)
         if not file.exists():
             file.touch()
@@ -26,6 +26,9 @@ class Ledger:
         return cls(file=file, entries=entries)
 
     def append(self, event: dict):
+        event = event.copy()
+        event["#"] = len(self.entries)
+        event["timestamp"] = datetime.now(timezone.utc).strftime(self.time_format)
         json_event = json_dumps(event)
         with self.file.open("a", encoding="utf-8") as f:
             f.write(f"{json_event}\n")
@@ -36,18 +39,38 @@ class Ledger:
         author: str,
         user_id: int,
         user_name: str,
-        discord_id: int,
+        discord_id: int | str = "",
         reason: str = "",
     ):
         event = {
-            "#": len(self.entries),
-            "timestamp": datetime.now(timezone.utc).strftime(self.time_format),
             "type": "user_update",
             "info": {
-                "user_id": user_id,
-                "user_name": user_name,
+                "user_id": int(user_id),
+                "user_name": str(user_name),
                 "discord_id": discord_id,
-                "reason": reason,
+                "reason": str(reason),
+            },
+        }
+        self.append(event)
+
+    def update_balance(
+        self,
+        author: str,
+        user_id: int,
+        delta: float,
+        old_balance: float,
+        new_balance: float,
+        reason: str = "",
+    ):
+        event = {
+            "type": "balance_update",
+            "author": str(author),
+            "info": {
+                "user_id": int(user_id),
+                "delta": float(delta),
+                "old_balance": float(old_balance),
+                "new_balance": float(new_balance),
+                "reason": str(reason),
             },
         }
         self.append(event)

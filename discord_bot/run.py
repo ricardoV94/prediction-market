@@ -5,6 +5,7 @@ from discord import app_commands, ui
 import requests
 from dotenv import load_dotenv
 from pprint import pprint
+from pathlib import Path
 
 from market.exchange import Ledger, Exchange
 from discord_bot.registration import start_registration_flow
@@ -23,7 +24,10 @@ if not all([DISCORD_BOT_TOKEN, GUILD_ID, CHANNEL_ID]):
     exit(1)
 
 # --- Setup ---
-LEDGER = Ledger.from_json("data/ledger.json")
+ledger_path = Path("data/ledger.json")
+ledger_path.parent.mkdir(parents=True, exist_ok=True)
+ledger_path.touch(exist_ok=True)
+LEDGER = Ledger.from_json(ledger_path)
 EXCHANGE = Exchange.from_ledger(LEDGER)
 pprint(EXCHANGE.markets)
 pprint(EXCHANGE.users)

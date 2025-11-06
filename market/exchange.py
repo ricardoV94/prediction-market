@@ -257,6 +257,10 @@ class Exchange:
                     if info["discord_id"]:
                         discord_id = info["discord_id"]
                         self._discord_user_ids[discord_id] = user_id
+                case "balance_update":
+                    user_id = info["user_id"]
+                    new_balance = entry["new_balance"]
+                    self._users[user_id].balance = new_balance
                 case _:
                     raise NotImplementedError(
                         f"Entry type {entry['type']} not yet supported"
