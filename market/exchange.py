@@ -9,6 +9,18 @@ from market.ledger import Ledger
 Shares = namedtuple("Shares", ["No", "Yes"])
 
 
+def yes_price(liquidity: int, no_shares: int, yes_shares: int) -> float:
+    yes_weight = exp(yes_shares / liquidity)
+    no_weight = exp(no_shares / liquidity)
+    price = yes_weight / (yes_weight + no_weight)
+    # Handle out-of-bounds roundoff errors
+    if price < 0:
+        price = 0
+    elif price > 1:
+        price = 1
+    return 100 * price
+
+
 class MarketStatus(Enum):
     open = 0
     closed = 1
@@ -34,21 +46,28 @@ class Market:
 
     @property
     def yes_price(self) -> float:
-        no_shares, yes_shares = self.shares
-        liquidity = self.liquidity
-        yes_weight = exp(yes_shares / liquidity)
-        no_weight = exp(no_shares / liquidity)
-        price = yes_weight / (yes_weight + no_weight)
-        # Handle out-of-bounds roundoff errors
-        if price < 0:
-            price = 0
-        elif price > 1:
-            price = 1
-        return 100 * price
+        return yes_price(liquidity, *self.shares)
 
     @property
     def no_price(self) -> float:
         return 100 - self.yes_price
+
+    def simulate_trade(
+        self, new_no_shares: int, new_yes_shares: int
+    ) -> tuple[float, float, float]:
+        # Compute LMSR cost for a trade
+        liquidity = self.liquidity
+        no_shares, yes_shares = self.shares
+        current_score = log(exp(yes_shares / liquidity) + exp(no_shares / liquidity))
+        new_score = log(
+            exp(new_yes_shares / liquidity) + exp(new_no_shares / liquidity),
+        )
+        cost = (new_score - current_score) * liquidity * 100
+
+        new_yes_price = yes_price(liquidity, new_no_shares, new_yes_shares)
+        new_no_price = 100 - new_yes_price
+
+        return round(cost, 2), new_yes__price, new_no_price
 
     def simulate_liquidation_proceeds(self, user_no_shares, user_yes_shares) -> float:
         """Computes total proceeds from unwinding a user position in the current market."""

@@ -28,3 +28,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["market*", "discord_bot*"]
+
+[tool.basedpyright]
+reportUnusedCallResult = false

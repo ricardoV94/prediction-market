@@ -1,13 +1,10 @@
 import traceback
 import os
 import discord
-from discord import app_commands, ui
-import requests
+from discord import app_commands
 from dotenv import load_dotenv
 from pprint import pformat
 from pathlib import Path
-import logging
-
 import logging
 
 
@@ -22,7 +19,7 @@ LOGGER.setLevel(logging.DEBUG)
 from market.exchange import Ledger, Exchange
 from discord_bot.registration import start_registration_flow
 from discord_bot.market_description import create_market_embed
-
+from discord_bot.trade import start_trade_flow
 
 # --- Configuration ---
 load_dotenv()
@@ -43,111 +40,10 @@ EXCHANGE = Exchange.from_ledger(LEDGER)
 LOGGER.info(pformat(EXCHANGE.markets))
 LOGGER.info(pformat(EXCHANGE.users))
 LOGGER.info(pformat(f"{EXCHANGE.discord_user_ids=}"))
-MARKET_TOPIC_IDS = {}
+MARKET_TOPIC_IDS: dict[int, int] = {}
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
-
-
-# --- UI Views ---
-class ConfirmView(ui.View):
-    def __init__(
-        self,
-        author: discord.User,
-        market_id: str,
-        share_type: "str",
-        quantity: int,
-        cost: float,
-        question: str,
-        current_balance: float,
-        user_id: str,
-    ):
-        super().__init__(timeout=180)  # 3-minute timeout
-        self.author = author
-        self.market_id = market_id
-        self.share_type = share_type
-        self.quantity = quantity
-        self.cost = cost
-        self.question = question
-        self.current_balance = current_balance
-        self.user_id = user_id
-        self.message: discord.InteractionMessage | None = None
-
-    async def on_timeout(self):
-        if self.message:
-            for item in self.children:
-                item.disabled = True
-            await self.message.edit(content="⌛️ **Order Timed Out**", view=self)
-
-    @ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to confirm this order."
-            )
-            return
-
-        # Disable buttons and keep original message
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
-
-        # Send a new message for status updates
-        status_message = await interaction.followup.send(
-            "⏳ Executing trade...", wait=True
-        )
-
-        # 2. Execute the trade
-        try:
-            trade_payload = {
-                "userId": self.user_id,
-                "marketId": self.market_id,
-                "shareType": self.share_type.value,
-                "quantity": self.quantity,
-                "userEmail": f"{interaction.user.name}@{interaction.user.id}",
-            }
-            response = requests.post(
-                SCRIPT_URL, json=trade_payload | {"token": API_TOKEN}
-            )
-            response.raise_for_status()
-            trade_result = response.json()
-
-            if trade_result.get("ok"):
-                await status_message.edit(content="✅ **Trade Executed!**")
-                await interaction.edit_original_response(view=None)
-            else:
-                error_message = trade_result.get(
-                    "error", "An unknown error occurred during the trade."
-                )
-                await status_message.edit(
-                    content=f"❌ **Trade Failed:** {error_message}"
-                )
-                await interaction.edit_original_response(view=None)
-
-        except requests.exceptions.RequestException as e:
-            await status_message.edit(
-                content=f"❌ **System Error:** Could not execute the trade. {e}"
-            )
-            await interaction.edit_original_response(view=None)
-        except Exception as e:
-            await status_message.edit(
-                content=f"❌ **An unexpected error occurred:** {e}"
-            )
-            await interaction.edit_original_response(view=None)
-
-    @ui.button(label="Cancel", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to cancel this order."
-            )
-            return
-
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(
-            content="❌ **Order Cancelled.**", view=self, embed=None
-        )
 
 
 # --- Bot Events ---
@@ -353,184 +249,13 @@ async def trade(
         )
         return
     await interaction.response.defer(ephemeral=True)
-
-    try:
-        try:
-            market_id = MARKET_TOPIC_IDS[interaction.channel.id]
-        except KeyError:
-            await interaction.followup.send(
-                content="❌ **Invalid location:** You can only trade inside a market topic."
-            )
-            return
-
-        if market_id not in EXCHANGE.markets:
-            await interaction.followup.send(
-                content="❌ **Could not find market in database:**"
-            )
-            return
-
-        if quantity == 0:
-            await interaction.followup.send(
-                content="✅ **Traded zero shares:** To the mind that is still, the whole universe surrenders."
-            )
-            return
-
-        market = EXCHANGE.markets[market_id]
-        old_price = market.yes_price
-        await interaction.followup.send(content=f"✅ **Trade successful:**")
-        await interaction.channel.send(
-            content=f"Someone traded {quantity} {'Yes' if yes_shares else 'No'} {'shares' if quantity > 1 else 'share'}. p(Yes): {old_price:.1f}% -> {market.yes_price:.1f}%"
-        )
-        starter_message = await interaction.channel.fetch_message(
-            interaction.channel.id
-        )
-        if starter_message:
-            await starter_message.edit(content="", embed=create_market_embed(market))
-
-    except Exception as e:
-        LOGGER.error(
-            f"An unexpected error occurred in trade command: {traceback.format_exc()}"
-        )
-        await interaction.followup.send(content="❌ **An unexpected error occurred.**")
-
-
-# @tree.command(
-#     name="trade", description="Buy or sell shares. Use a negative quantity to sell."
-# )
-# @app_commands.describe(
-#     market_id="The ID of the market.",
-#     share_type="The type of share.",
-#     quantity="Number of shares to trade. Positive to buy, negative to sell.",
-# )
-# async def trade(
-#     interaction: discord.Interaction,
-#     market_id: str,
-#     share_type: str,
-#     quantity: int,
-# ):
-#     await interaction.response.send_message(
-#         "⏳ Retrieving trade information...", ephemeral=True
-#     )
-
-#     if quantity == 0:
-#         await interaction.edit_original_response(
-#             content="❌ **Invalid Quantity:** Please enter a non-zero number."
-#         )
-#         return
-
-#     try:
-#         # 1. Get trade preview data
-#         params = {
-#             "action": "getTradePreview",
-#             "discordHandle": str(interaction.user),
-#             "marketId": market_id,
-#             "shareType": share_type.value,
-#             "quantity": quantity,
-#         }
-#         print(f"Requesting trade preview with params: {params}")
-#         response = requests.get(SCRIPT_URL, params=params | {"token": API_TOKEN})
-#         print(f"Preview response status: {response.status_code}")
-#         if response.status_code != 200:
-#             print(f"Preview response text: {response.text}")
-#         response.raise_for_status()
-#         preview_response = response.json()
-
-#         if not preview_response.get("ok"):
-#             error = preview_response.get("error", "Failed to retrieve trade preview.")
-#             await interaction.edit_original_response(content=f"❌ **Error:** {error}")
-#             return
-
-#         data = preview_response["data"]
-#         user = data["user"]
-#         market = data["market"]
-#         trade = data["trade"]
-#         simulation = data["simulation"]
-#         holdings = data["userHoldings"]
-
-#         # 2. Create detailed embed
-#         action = "Buy" if quantity > 0 else "Sell"
-#         abs_quantity = abs(quantity)
-#         cost_or_proceeds = "Cost" if quantity > 0 else "Proceeds"
-
-#         long_desc = market.get("long_description")
-#         embed = discord.Embed(
-#             title=f"Order Preview: {market['description']}",
-#             description=f"Detailed criteria: *{long_desc}*" if long_desc else None,
-#             color=discord.Color.blue(),
-#         )
-#         embed.set_author(name=f"Market #{market['id']} | Status: {market['status']}")
-
-#         # Market Info
-#         embed.add_field(
-#             name="Current Market Stats",
-#             value=(
-#                 f"**Current prices:** Yes: $`{market['pYes']:.2f}` | No: $`{market['pNo']:.2f}`\n"
-#                 f"**Volume:** `{int(market.get('volume', 0))}`"
-#             ),
-#             inline=False,
-#         )
-
-#         # User Info
-#         embed.add_field(
-#             name="Your Position",
-#             value=(
-#                 f"**Balance:** `${user['balance']:,.2f}`\n"
-#                 f"**Shares:** Yes: `{holdings['yesShares']}` | No: `{holdings['noShares']}`"
-#             ),
-#             inline=False,
-#         )
-
-#         # Trade Info
-#         embed.add_field(
-#             name="Proposed Trade",
-#             value=(
-#                 f"**Action:** {action} `{abs_quantity}` **{trade['shareType']}** shares\n"
-#                 f"**{cost_or_proceeds}:** `${abs(trade['cost']):,.2f}`"
-#             ),
-#             inline=False,
-#         )
-
-#         # Outcome Info
-#         embed.add_field(
-#             name="Projected Outcome",
-#             value=(
-#                 f"**New Balance:** `${simulation['newBalance']:,.2f}`\n"
-#                 f"**New Prices:** Yes: $`{simulation['newPYes']:.2f}` | No: $`{simulation['newPNo']:.2f}`"
-#             ),
-#             inline=False,
-#         )
-
-#         embed.set_footer(
-#             text="Please confirm your order. This will expire in 3 minutes."
-#         )
-
-#         # 3. Send confirmation message
-#         view = ConfirmView(
-#             author=interaction.user,
-#             market_id=market_id,
-#             share_type=share_type,
-#             quantity=quantity,
-#             cost=trade["cost"],
-#             question=market["description"],
-#             current_balance=user["balance"],
-#             user_id=user["id"],
-#         )
-
-#         message = await interaction.edit_original_response(
-#             content="", embed=embed, view=view
-#         )
-#         view.message = message
-
-#     except requests.exceptions.RequestException as e:
-#         print(f"Error calling Google Apps Script: {e}")
-#         await interaction.edit_original_response(
-#             content="❌ **System Error:** Could not communicate with the backend service."
-#         )
-#     except Exception as e:
-#         print(f"An unexpected error occurred in trade command: {e}")
-#         await interaction.edit_original_response(
-#             content="❌ **An unexpected error occurred.**"
-#         )
+    await start_trade_flow(
+        interaction=interaction,
+        is_yes_shares=yes_shares,
+        quantity=quantity,
+        market_topic_ids=MARKET_TOPIC_IDS,
+        exchange=EXCHANGE,
+    )
 
 
 # --- Run the bot ---

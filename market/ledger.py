@@ -1,3 +1,4 @@
+from typing import Literal
 from json import loads as json_loads, dumps as json_dumps
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,7 @@ class Ledger:
     ):
         event = {
             "type": "user_update",
+            "author": str(author),
             "info": {
                 "user_id": int(user_id),
                 "user_name": str(user_name),
@@ -71,6 +73,32 @@ class Ledger:
                 "old_balance": float(old_balance),
                 "new_balance": float(new_balance),
                 "reason": str(reason),
+            },
+        }
+        self.append(event)
+
+    def user_trade(
+        self,
+        author: str,
+        user_id: int,
+        market_id: int,
+        share_type: Literal["Yes", "No"],
+        quantity: int,
+        cost: float,
+        old_balance: float,
+        new_balance: float,
+    ):
+        event = {
+            "type": "user_trade",
+            "author": str(author),
+            "info": {
+                "user_id": int(user_id),
+                "market_id": int(market_id),
+                "share_type": str(share_type),
+                "quantity": int(quantity),
+                "cost": float(cost),
+                "old_balance": float(old_balance),
+                "new_balance": float(new_balance),
             },
         }
         self.append(event)
