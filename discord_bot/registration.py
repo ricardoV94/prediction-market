@@ -11,26 +11,21 @@ NEW_SIGNUP_BALANCE = 10_000.0
 async def start_registration_flow(
     interaction: Interaction, exchange: Exchange, logger: logging.Logger
 ):
-    try:
-        if interaction.user.id in exchange.discord_user_ids:
-            logger.debug(
-                f"Registered user tried to register again: {interaction.user} with id {interaction.user.id}"
-            )
-            await interaction.followup.send(
-                "You are already registered. "
-                "Use `/balance`, or `/positions` to check your status."
-            )
-        else:
-            logger.info(f"Registering new user: {interaction.user}")
-            view = RegistrationView(interaction, exchange=exchange, logger=logger)
-            await interaction.followup.send(
-                "Were you already registered in the old Google Spreadsheet?",
-                view=view,
-            )
-
-    except Exception as e:
-        logger.error(f"An unexpected error occurred: {traceback.format_exc()}")
-        await interaction.followup.send("❌ **An unexpected error occurred.**")
+    if interaction.user.id in exchange.discord_user_ids:
+        logger.debug(
+            f"Registered user tried to register again: {interaction.user} with id {interaction.user.id}"
+        )
+        await interaction.followup.send(
+            "You are already registered. "
+            "Use `/balance`, or `/positions` to check your status."
+        )
+    else:
+        logger.info(f"Registering new user: {interaction.user}")
+        view = RegistrationView(interaction, exchange=exchange, logger=logger)
+        await interaction.followup.send(
+            "Were you already registered in the old Google Spreadsheet?",
+            view=view,
+        )
 
 
 class RegistrationView(ui.View):
