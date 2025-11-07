@@ -26,6 +26,8 @@ async def start_trade_flow(
     quantity: int,
     exchange: Exchange,
 ):
+    LOGGER.debug(f"User considering trading: {interaction.user}")
+
     if quantity == 0:
         await interaction.followup.send(
             content="✅ **Traded zero shares:** To the mind that is still, the whole universe surrenders."
