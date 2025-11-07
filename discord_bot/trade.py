@@ -129,21 +129,25 @@ async def start_trade_flow(
         inline=True,
     )
 
+    embed.add_field(name="", value="", inline=False)
+
     embed.add_field(
-        name="Balance change",
+        name="Δ Balance",
         value=f"{balance:,.2f} → ${new_balance:,.2f}",
         inline=True,
     )
 
     embed.add_field(
-        name="Market movement",
-        value=f"P(yes): {yes_price:.2f}% → {new_yes_price:.2f}%",
+        name="Δ P(yes)",
+        value=f"{yes_price:.2f}% → {new_yes_price:.2f}%",
         inline=True,
     )
 
+    embed.add_field(name="", value="", inline=True)
+
     if invalid_trade:
         embed.set_footer(
-            text=f"❌ **{invalid_reason}**",
+            text=f"❌ {invalid_reason}",
         )
 
         def on_confirm():
@@ -165,7 +169,7 @@ async def start_trade_flow(
                 new_balance=new_balance,
             )
             # Trigger update by accessing market
-            return exchange.markets[market.id]
+            return exchange.markets[market.id], quantity
 
     view = ConfirmView(
         author=interaction.user,
@@ -187,21 +191,14 @@ class ConfirmView(ui.View):
                 if isinstance(child, ui.Button) and child.label == "Confirm":
                     child.disabled = True
 
-    def disable_buttons(self):
-        for item in self.children:
-            item.disabled = True
-
     async def on_timeout(self):
-        if self.message:
-            self.disable_buttons()
-            await self.message.edit(content="⌛️ **Order Timed Out**", view=self)
+        await self.message.edit(content="⌛️ **Order Timed Out**", view=None)
 
     @ui.button(label="Confirm", style=ButtonStyle.green)
     @require_author
     async def confirm(self, interaction: Interaction, button: ui.Button):
-        self.disable_buttons()
-        await interaction.response.edit_message(view=self)
-        updated_market = self.on_confirm()
+        await interaction.response.edit_message(view=None)
+        updated_market, shares_traded = self.on_confirm()
 
         await interaction.followup.send("✅ **Trade successful!**", ephemeral=True)
         starter_message = await interaction.channel.fetch_message(
@@ -209,10 +206,12 @@ class ConfirmView(ui.View):
         )
         if starter_message:
             await starter_message.edit(embed=create_market_embed(updated_market))
+        await interaction.followup.send(
+            f"👀 Someone traded {shares_traded} shares", ephemeral=False
+        )
 
     @ui.button(label="Cancel", style=ButtonStyle.red)
     @require_author
     async def cancel(self, interaction: Interaction, button: ui.Button):
-        self.disable_buttons()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(view=None)
         await interaction.followup.send("❌ **Order Cancelled.**", ephemeral=True)

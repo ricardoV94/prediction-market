@@ -2,9 +2,19 @@ from collections import namedtuple
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from math import exp, log
+from math import exp as _exp
+from math import log
 
 from market.ledger import Ledger
+
+
+def exp(x) -> float:
+    "Safe exp without overflow error"
+    try:
+        return _exp(x)
+    except OverflowError:
+        return float("inf")
+
 
 Shares = namedtuple("Shares", ["no", "yes"])
 

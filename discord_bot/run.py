@@ -7,15 +7,15 @@ from pprint import pformat
 from traceback import format_exc
 from typing import Iterable
 
-from discord import Client, Object, Intents, Interaction, app_commands
+from discord import Client, Intents, Interaction, Object, app_commands
 from dotenv import load_dotenv
 
 from discord_bot.market_description import create_market_embed
 from discord_bot.permissions import check_guild_factory, check_registered_factory
-from discord_bot.status import show_balance, show_positions
 from discord_bot.registration import start_registration_flow
+from discord_bot.status import show_balance, show_positions
 from discord_bot.trade import start_trade_flow
-from market.exchange import Ledger, Exchange
+from market.exchange import Exchange, Ledger
 
 
 def setup_package_logging(
@@ -151,11 +151,10 @@ async def on_ready():
     for market_id, market in sorted(EXCHANGE.markets.items()):
         if market_id not in markets_with_threads:
             market_embed = create_market_embed(market)
-            new_thread = await forum_channel.create_thread(
+            thread_with_message = await forum_channel.create_thread(
                 name=f"{market.question} (#{market.id})", embed=market_embed
             )
-            print(new_thread)
-            MARKET_TOPIC_IDS[new_thread.id] = market_id
+            MARKET_TOPIC_IDS[thread_with_message.thread.id] = market_id
             LOGGER.info(f"Created thread for market {market_id}")
 
     LOGGER.info(f"{MARKET_TOPIC_IDS=}")
