@@ -1,18 +1,23 @@
-import logging
-import traceback
+from logging import getLogger
 
+from discord import ButtonStyle, Interaction, InteractionMessage, ui
+
+from discord_bot.permissions import require_author
 from market.exchange import Exchange
-from discord import ui, Interaction, InteractionMessage, ButtonStyle
+
 
 OLD_SIGNUP_BONUS = 5_000.0
 NEW_SIGNUP_BALANCE = 10_000.0
 
+LOGGER = getLogger(__name__)
+
 
 async def start_registration_flow(
-    interaction: Interaction, exchange: Exchange, logger: logging.Logger
+    interaction: Interaction,
+    exchange: Exchange,
 ):
     if interaction.user.id in exchange.discord_user_ids:
-        logger.debug(
+        LOGGER.debug(
             f"Registered user tried to register again: {interaction.user} with id {interaction.user.id}"
         )
         await interaction.followup.send(
@@ -20,8 +25,8 @@ async def start_registration_flow(
             "Use `/balance`, or `/positions` to check your status."
         )
     else:
-        logger.info(f"Registering new user: {interaction.user}")
-        view = RegistrationView(interaction, exchange=exchange, logger=logger)
+        LOGGER.info(f"Registering new user: {interaction.user}")
+        view = RegistrationView(interaction, exchange=exchange)
         await interaction.followup.send(
             "Were you already registered in the old Google Spreadsheet?",
             view=view,
@@ -30,13 +35,14 @@ async def start_registration_flow(
 
 class RegistrationView(ui.View):
     def __init__(
-        self, interaction: Interaction, exchange: Exchange, logger: logging.Logger
+        self,
+        interaction: Interaction,
+        exchange: Exchange,
     ):
         super().__init__(timeout=180)  # 3-minute timeout
         self.author = interaction.user
         self.message: InteractionMessage | None = None
         self.exchange = exchange
-        self.logger = logger
 
     async def on_timeout(self):
         if self.message:
@@ -45,25 +51,15 @@ class RegistrationView(ui.View):
             await self.message.edit(content="⌛️ **Registration Timed Out**", view=self)
 
     @ui.button(label="Yes", style=ButtonStyle.green)
+    @require_author
     async def yes(self, interaction: Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to perform this action.", ephemeral=True
-            )
-            return
-
         await interaction.response.send_modal(
-            SpreadSheetRegistrationModel(exchange=self.exchange, logger=self.logger)
+            SpreadSheetRegistrationModel(exchange=self.exchange)
         )
 
     @ui.button(label="No", style=ButtonStyle.red)
+    @require_author
     async def no(self, interaction: Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to perform this action.", ephemeral=True
-            )
-            return
-
         for item in self.children:
             item.disabled = True
 
@@ -102,15 +98,14 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
         required=True,
     )
 
-    def __init__(self, exchange: Exchange, logger: logging.Logger):
+    def __init__(self, exchange: Exchange):
         super().__init__()
         self.exchange = exchange
-        self.logger = logger
 
     async def on_submit(self, interaction: Interaction):
         old_id_or_username = self.id_text_field.value
         current_users = self.exchange.users
-        self.logger.debug(f"Trying to find old user {old_id_or_username}")
+        LOGGER.debug(f"Trying to find old user {old_id_or_username}")
         try:
             old_id = int(old_id_or_username.strip())
         except Exception:
@@ -131,7 +126,7 @@ class SpreadSheetRegistrationModel(ui.Modal, title="Registered in old Spreadshee
                 if old_user.user_name.lower() == old_username:
                     break  # match
             else:  # no-break
-                self.logger.info(
+                LOGGER.info(
                     f"Failed to find user {old_id_or_username}. Could be missing are already registered"
                 )
                 await interaction.response.send_message(

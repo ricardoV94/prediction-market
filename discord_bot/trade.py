@@ -1,5 +1,4 @@
-import logging
-import traceback
+from logging import getLogger
 from typing import Callable
 
 from discord import (
@@ -14,24 +13,9 @@ from discord import (
 
 from market.exchange import Exchange
 from discord_bot.market_description import create_market_embed
+from discord_bot.permissions import require_author
 
-LOGGER = logging.getLogger(__name__)
-
-
-def require_author(func: Callable[["ConfirmView", Interaction, ui.Button], Coroutine]):
-    """
-    Decorator that checks if the interaction user is the author of the view.
-    """
-
-    async def wrapper(self: "ConfirmView", interaction: Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to do this.", ephemeral=True
-            )
-            return
-        await func(self, interaction, button)
-
-    return wrapper
+LOGGER = getLogger(__name__)
 
 
 class ConfirmView(ui.View):
@@ -70,6 +54,7 @@ class ConfirmView(ui.View):
 
 async def start_trade_flow(
     interaction: Interaction,
+    user_id: int,
     is_yes_shares: bool,
     quantity: int,
     market_topic_ids: dict[int, int],
@@ -100,7 +85,7 @@ async def start_trade_flow(
 
     # TODO: Decorator for actions that require being registered
     market = exchange.markets[market_id]
-    user = market.users[market.discord_user_ids[interaction.user.id]]
+    user = market.users[user_id]
     no_shares, yes_shares = user.positions.get(market_id, (0, 0))
 
     new_no_shares = no_shares + (quantity * (not is_yes_shares))
@@ -139,7 +124,7 @@ async def start_trade_flow(
     embed.add_field(
         name="Current Market Stats",
         value=(
-            f"**Current prices:** Yes: $`{market.yes_price:.2f}` | No: $`{no_price:.2f}`\n"
+            f"**Current prices:** Yes: $`{market.yes_price:.2f}` | No: $`{market.no_price:.2f}`\n"
             f"**Volume:** `{market.volume}`"
         ),
         inline=False,
@@ -149,7 +134,7 @@ async def start_trade_flow(
     embed.add_field(
         name="Your Position",
         value=(
-            f"**Balance:** `${old_balance:,.2f}`\n"
+            f"**Balance:** `${balance:,.2f}`\n"
             f"**Shares:** Yes: `{yes_shares}` | No: `{no_shares}`"
         ),
         inline=False,
@@ -159,7 +144,7 @@ async def start_trade_flow(
     embed.add_field(
         name="Proposed Trade",
         value=(
-            f"**Action:** {action} `{abs_quantity}` **{trade['shareType']}** shares\n"
+            f"**Action:** {action} `{abs_quantity}` **{'yes' if is_yes_shares else 'no'}** shares\n"
             f"**{cost_or_proceeds}:** `${abs(cost):,.2f}`"
         ),
         inline=False,
@@ -196,7 +181,7 @@ async def start_trade_flow(
                 quantity=quantity,
                 cost=cost,
                 old_balance=balance,
-                new_balance=new_balanace,
+                new_balance=new_balance,
             )
 
     view = ConfirmView(

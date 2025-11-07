@@ -46,7 +46,7 @@ class Market:
 
     @property
     def yes_price(self) -> float:
-        return yes_price(liquidity, *self.shares)
+        return yes_price(self.liquidity, *self.shares)
 
     @property
     def no_price(self) -> float:
