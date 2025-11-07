@@ -62,7 +62,7 @@ setup_package_logging(
     level=logging.DEBUG,
 )
 
-LOGGER = getLogger(__name__)
+LOGGER = getLogger("discord_bot.run")
 
 load_dotenv()
 DISCORD_BOT_TOKEN = getenv("DISCORD_BOT_TOKEN")
@@ -113,13 +113,13 @@ def handle_errors(func):
     return wrapper
 
 
-intents = Intents.default()
-client = Client(intents=intents)
+client = Client(intents=Intents.default())
 tree = app_commands.CommandTree(client)
 
 
 @client.event
 async def on_ready():
+    print("READY")
     guild = Object(id=GUILD_ID)
     tree.copy_global_to(guild=guild)
     await tree.sync(guild=guild)
