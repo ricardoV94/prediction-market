@@ -203,7 +203,7 @@ class Exchange:
             markets[market_id] = market
 
         # Second loop to collect shares
-        for entry in reversed(ledger.entries):
+        for entry in ledger.entries:
             if entry["type"] != "trade":
                 # We leave shares unchanged after resolutions, so we can see what the final status was easily
                 continue
