@@ -4,7 +4,6 @@ from discord import Color, Embed, Interaction
 
 from market.exchange import Exchange
 
-
 LOGGER = getLogger(__name__)
 
 
@@ -39,11 +38,11 @@ async def show_positions(interaction: Interaction, user_id: int, exchange: Excha
     total_shares = 0
     total_market_value = 0
     holdings = []
-    for market_id, (no_shares, yes_shares) in user.positions.items():
+    for market_id, shares in user.positions.items():
         market = markets[market_id]
-        market_value = market.simulate_liquidation_proceeds(no_shares, yes_shares)
-        holdings.append((market, (no_shares, yes_shares), market_value))
-        total_shares += no_shares + yes_shares
+        market_value = market.simulate_liquidation_proceeds(shares)
+        holdings.append((market, shares, market_value))
+        total_shares += sum(shares)
         total_market_value += market_value
 
         # cost_basis = _round_cents(

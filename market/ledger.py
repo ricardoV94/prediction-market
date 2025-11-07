@@ -27,10 +27,13 @@ class Ledger:
         return cls(file=file, entries=entries)
 
     def append(self, event: dict):
-        event = event.copy()
-        event["#"] = len(self.entries)
-        event["timestamp"] = datetime.now(timezone.utc).strftime(self.time_format)
-        json_event = json_dumps(event)
+        json_event = json_dumps(
+            {
+                "#": len(self.entries),
+                "timestamp": datetime.now(timezone.utc).strftime(self.time_format),
+            }
+            | event
+        )
         with self.file.open("a", encoding="utf-8") as f:
             f.write(f"{json_event}\n")
         self.entries.append(json_loads(json_event))
@@ -89,7 +92,7 @@ class Ledger:
         new_balance: float,
     ):
         event = {
-            "type": "user_trade",
+            "type": "trade",
             "author": str(author),
             "info": {
                 "user_id": int(user_id),

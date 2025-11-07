@@ -1,24 +1,12 @@
 from collections import namedtuple
-from math import exp, log
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
+from math import exp, log
 
 from market.ledger import Ledger
 
-Shares = namedtuple("Shares", ["No", "Yes"])
-
-
-def yes_price(liquidity: int, no_shares: int, yes_shares: int) -> float:
-    yes_weight = exp(yes_shares / liquidity)
-    no_weight = exp(no_shares / liquidity)
-    price = yes_weight / (yes_weight + no_weight)
-    # Handle out-of-bounds roundoff errors
-    if price < 0:
-        price = 0
-    elif price > 1:
-        price = 1
-    return 100 * price
+Shares = namedtuple("Shares", ["no", "yes"])
 
 
 class MarketStatus(Enum):
@@ -37,40 +25,66 @@ class Market:
     resolve_date: datetime | None
     detailed_criteria: str
     liquidity: int
-    status: MarketStatus
+    _status: MarketStatus
     shares: Shares
 
     @property
+    def status(self) -> MarketStatus:
+        if self._status not in (MarketStatus.closed, MarketStatus.open):
+            return self._status
+        if self.open_date <= datetime.now(timezone.utc) < self.close_date:
+            return MarketStatus.open
+        else:
+            return MarketStatus.closed
+
+    @property
     def volume(self) -> int:
-        return self.shares[0] + self.shares[1]
+        return sum(self.shares)
+
+    @staticmethod
+    def _yes_price(liquidity: int, shares=Shares) -> float:
+        no_shares, yes_shares = shares.no, shares.yes
+        yes_weight = exp(yes_shares / liquidity)
+        no_weight = exp(no_shares / liquidity)
+        price = yes_weight / (yes_weight + no_weight)
+        # Handle out-of-bounds roundoff errors
+        if price < 0:
+            price = 0
+        elif price > 1:
+            price = 1
+        return 100 * price
 
     @property
     def yes_price(self) -> float:
-        return yes_price(self.liquidity, *self.shares)
+        return self._yes_price(self.liquidity, self.shares)
 
     @property
     def no_price(self) -> float:
         return 100 - self.yes_price
 
-    def simulate_trade(
-        self, new_no_shares: int, new_yes_shares: int
-    ) -> tuple[float, float, float]:
+    def simulate_trade(self, traded_shares: Shares) -> tuple[float, float, float]:
         # Compute LMSR cost for a trade
         liquidity = self.liquidity
         no_shares, yes_shares = self.shares
         current_score = log(exp(yes_shares / liquidity) + exp(no_shares / liquidity))
+
+        new_no_shares = no_shares + traded_shares.no
+        new_yes_shares = yes_shares + traded_shares.yes
         new_score = log(
             exp(new_yes_shares / liquidity) + exp(new_no_shares / liquidity),
         )
         cost = (new_score - current_score) * liquidity * 100
 
-        new_yes_price = yes_price(liquidity, new_no_shares, new_yes_shares)
+        new_yes_price = self._yes_price(
+            liquidity, Shares(no=new_no_shares, yes=new_yes_shares)
+        )
         new_no_price = 100 - new_yes_price
 
-        return round(cost, 2), new_yes__price, new_no_price
+        return round(cost, 2), new_no_price, new_yes_price
 
-    def simulate_liquidation_proceeds(self, user_no_shares, user_yes_shares) -> float:
+    def simulate_liquidation_proceeds(self, user_shares: Shares) -> float:
         """Computes total proceeds from unwinding a user position in the current market."""
+        user_no_shares, user_yes_shares = user_shares.no, user_shares.yes
         yes_price = self.yes_price
         b = self.liquidity
 
@@ -106,19 +120,19 @@ class Exchange:
     _ledger_index: int
 
     @property
-    def markets(self):
+    def markets(self) -> dict[int, Market]:
         if self._ledger_index != len(self.ledger.entries):
             self.update_from_extended_ledger()
         return self._markets
 
     @property
-    def users(self):
+    def users(self) -> dict[int, User]:
         if self._ledger_index != len(self.ledger.entries):
             self.update_from_extended_ledger()
         return self._users
 
     @property
-    def discord_user_ids(self):
+    def discord_user_ids(self) -> dict[int, int]:
         if self._ledger_index != len(self.ledger.entries):
             self.update_from_extended_ledger()
         return self._discord_user_ids
@@ -138,39 +152,43 @@ class Exchange:
                 continue
 
             # New market
+            open_date = datetime.strptime(info["open_date"], date_format).replace(
+                tzinfo=timezone.utc
+            )
+            close_date = datetime.strptime(info["close_date"], date_format).replace(
+                tzinfo=timezone.utc
+            )
+            resolve_date = (
+                datetime.strptime(info["resolve_date"], date_format).replace(
+                    tzinfo=timezone.utc
+                )
+                if info["resolve_date"]
+                else None
+            )
             match info["status"]:
+                # FIXME: This is a bit unfortunate, the ledger is not enough to find the status of a market
+                # because we don't issue open/closed status automatically. Figure out nicer API
+                case "open":
+                    status = MarketStatus.open
+                case "closed":
+                    status = MarketStatus.closed
                 case "resolved_yes":
                     status = MarketStatus.resolved_yes
                 case "resolved_no":
                     status = MarketStatus.resolved_no
-                case "open":
-                    # We don't issue a closed event when market goes over close date
-                    if (
-                        datetime.strptime(info["close_date"], date_format)
-                        < datetime.now()
-                    ):
-                        status = MarketStatus.closed
-                    else:
-                        status = MarketStatus.open
-                case "closed":
-                    status = MarketStatus.closed
                 case _:
                     raise ValueError(f"Unknown market status: {info['status']}")
 
             market = Market(
                 id=market_id,
                 question=info["question"],
-                open_date=datetime.strptime(info["open_date"], date_format),
-                close_date=datetime.strptime(info["close_date"], date_format),
-                resolve_date=(
-                    datetime.strptime(info["resolve_date"], date_format)
-                    if info["resolve_date"]
-                    else None
-                ),
+                open_date=open_date,
+                close_date=close_date,
+                resolve_date=resolve_date,
                 detailed_criteria=info["detailed_criteria"],
                 liquidity=info["liquidity"],
-                status=status,
-                shares=Shares(0, 0),
+                _status=status,
+                shares=Shares(no=0, yes=0),
             )
             markets[market_id] = market
 
@@ -183,14 +201,14 @@ class Exchange:
             info = entry["info"]
             market_id = info["market_id"]
             quantity = info["quantity"]
-            yes_shares, no_shares = markets[market_id].shares
-            if info["share_type"] == "Yes":
-                yes_shares += quantity
-                assert yes_shares >= 0
-            else:
+            no_shares, yes_shares = markets[market_id].shares
+            if info["share_type"] == "No":
                 no_shares += quantity
                 assert no_shares >= 0
-            markets[market_id].shares = Shares(yes_shares, no_shares)
+            else:
+                yes_shares += quantity
+                assert yes_shares >= 0
+            markets[market_id].shares = Shares(no=no_shares, yes=yes_shares)
 
         return markets
 
@@ -237,7 +255,9 @@ class Exchange:
                 else:
                     no_shares += quantity
                     assert no_shares >= 0
-                users[user_id].positions[market_id] = Shares(no_shares, yes_shares)
+                users[user_id].positions[market_id] = Shares(
+                    no=no_shares, yes=yes_shares
+                )
                 users[user_id].balance = info["new_balance"]
         return users, discord_user_ids
 
@@ -280,6 +300,34 @@ class Exchange:
                     user_id = info["user_id"]
                     new_balance = info["new_balance"]
                     self._users[user_id].balance = new_balance
+                case "trade":
+                    user_id = info["user_id"]
+                    market_id = info["market_id"]
+                    new_balance = info["new_balance"]
+                    quantity = info["quantity"]
+                    share_type = info["share_type"]
+                    assert user_id in self._users
+                    assert market_id in self._markets
+                    assert new_balance >= 0
+                    assert share_type in ("Yes", "No")
+
+                    market = self._markets[market_id]
+                    new_market_no, new_market_yes = market.shares
+                    user = self._users[user_id]
+                    user.balance = new_balance
+                    new_no, new_yes = user.positions.get(market_id, (0, 0))
+                    if share_type == "No":
+                        new_market_no += quantity
+                        new_no += quantity
+                    else:
+                        new_market_yes += quantity
+                        new_yes += quantity
+
+                    assert (new_market_no >= 0) and (new_market_yes >= 0)
+                    assert (new_no >= 0) and (new_yes >= 0)
+                    market.shares = Shares(no=new_market_no, yes=new_market_yes)
+                    user.positions[market_id] = Shares(no=new_no, yes=new_yes)
+
                 case _:
                     raise NotImplementedError(
                         f"Entry type {entry['type']} not yet supported"
@@ -291,6 +339,21 @@ class Exchange:
 if __name__ == "__main__":
     from pprint import pprint
 
-    ledger = Ledger.from_json("data/ledger.json")
-    exchange = Exchange.from_ledger(ledger)
-    pprint(exchange)
+    # ledger = Ledger.from_json("data/ledger.json")
+    # exchange = Exchange.from_ledger(ledger)
+    # pprint(exchange)
+    #
+    market = Market(
+        id=0,
+        question="?",
+        open_date=datetime.now(timezone.utc),
+        close_date=datetime.now(timezone.utc),
+        resolve_date=None,
+        detailed_criteria="",
+        liquidity=10,
+        _status=MarketStatus.open,
+        shares=Shares(no=0, yes=20),
+    )
+    pprint(market)
+    print(market.yes_price, market.no_price, market.volume)
+    print(market.simulate_trade(Shares(no=0, yes=1)))

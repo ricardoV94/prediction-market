@@ -2,81 +2,30 @@ from logging import getLogger
 from typing import Callable
 
 from discord import (
-    Interaction,
-    Embed,
-    Color,
-    ui,
-    User as discordUser,
-    InteractionMessage,
     ButtonStyle,
+    Color,
+    Embed,
+    Interaction,
+    InteractionMessage,
+    ui,
 )
+from discord import User as discordUser
 
-from market.exchange import Exchange
 from discord_bot.market_description import create_market_embed
 from discord_bot.permissions import require_author
+from market.exchange import Exchange, MarketStatus, Shares
 
 LOGGER = getLogger(__name__)
-
-
-class ConfirmView(ui.View):
-    def __init__(self, author: discordUser, on_confirm: Callable, invalid_trade: bool):
-        super().__init__(timeout=180)  # 3-minute timeout
-        self.author = author
-        self.on_confirm = on_confirm
-        self.message: InteractionMessage | None = None
-        if invalid_trade:
-            self.confirm.disabled = True
-
-    async def disable_buttons(self):
-        for item in self.children:
-            item.disabled = True
-
-    async def on_timeout(self):
-        if self.message:
-            self.disable_buttons()
-            await self.message.edit(content="⌛️ **Order Timed Out**", view=self)
-
-    @ui.button(label="Confirm", style=ButtonStyle.green)
-    @require_author
-    async def confirm(self, interaction: Interaction, button: ui.Button):
-        self.disable_buttons()
-        await interaction.response.edit_message(view=self)
-        self.on_confirm()
-
-    @ui.button(label="Cancel", style=ButtonStyle.red)
-    @require_author
-    async def cancel(self, interaction: Interaction, button: ui.Button):
-        self.disable_buttons()
-        await interaction.response.edit_message(
-            content="❌ **Order Cancelled.**", view=self, embed=None
-        )
 
 
 async def start_trade_flow(
     interaction: Interaction,
     user_id: int,
+    market_id: int,
     is_yes_shares: bool,
     quantity: int,
-    market_topic_ids: dict[int, int],
     exchange: Exchange,
 ):
-    try:
-        market_id = market_topic_ids[interaction.channel.id]
-    except KeyError:
-        await interaction.followup.send(
-            content="❌ **Invalid location:** You can only trade inside a market topic."
-        )
-        return
-
-    if market_id not in exchange.markets:
-        LOGGER.warning(
-            f"Trying to trade in market_id {market_id} which is missing from Exchange {exchange.markets}"
-        )
-        await interaction.followup.send(
-            content="❌ **Could not find market in database:**"
-        )
-        return
-
     if quantity == 0:
         await interaction.followup.send(
             content="✅ **Traded zero shares:** To the mind that is still, the whole universe surrenders."
@@ -85,18 +34,20 @@ async def start_trade_flow(
 
     # TODO: Decorator for actions that require being registered
     market = exchange.markets[market_id]
-    user = market.users[user_id]
-    no_shares, yes_shares = user.positions.get(market_id, (0, 0))
-
-    new_no_shares = no_shares + (quantity * (not is_yes_shares))
-    new_yes_shares = yes_shares + (quantity * is_yes_shares)
-
-    cost, new_yes_price, new_no_price = market.simulate_trade(
-        new_no_shares=new_no_shares,
-        new_yes_shares=new_yes_shares,
-    )
+    user = exchange.users[user_id]
     balance = user.balance
-    new_balance = balance + cost
+    no_shares, yes_shares = user.positions.get(market_id, (0, 0))
+    yes_price = market.yes_price
+
+    traded_yes_shares = quantity * is_yes_shares
+    traded_no_shares = quantity * (not is_yes_shares)
+
+    cost, new_no_price, new_yes_price = market.simulate_trade(
+        traded_shares=Shares(no=traded_no_shares, yes=traded_yes_shares)
+    )
+    new_balance = balance - cost
+    new_no_shares = no_shares + traded_no_shares
+    new_yes_shares = yes_shares + traded_yes_shares
 
     # Create detailed embed
     action = "Buy" if quantity >= 0 else "Sell"
@@ -111,53 +62,83 @@ async def start_trade_flow(
     elif new_balance < 0:
         invalid_trade = True
         invalid_reason = "Insufficient balance"
+    elif market.status != MarketStatus.open:
+        invalid_trade = True
+        invalid_reason = "Market not open"
 
     long_desc = market.detailed_criteria
     embed = Embed(
-        title=f"Order Preview: {market.question} (#{market.id})",
+        title=f"Order Preview: {market.question}",
         description=f"Detailed criteria: *{long_desc}*" if long_desc else None,
-        color=Color.red() if invalid_trade else Color.blue(),
+        color=Color.red() if invalid_trade else Color.green(),
     )
-    # embed.set_author(name=f"Market #{market['id']} | Status: {market['status']}")
+
+    date_format = "%d-%m-%Y"
+    status_text = ""
+    if market.status == MarketStatus.open:
+        status_text = f"Open {market.open_date.strftime(date_format)} -> {market.close_date.strftime(date_format)} (UTC)"
+    else:
+        # Incorporate resolved/closed dates
+        status_text = market.status.name
+    embed.set_author(name=f"Market: #{market.id} | Status: {status_text}")
 
     # Market Info
     embed.add_field(
-        name="Current Market Stats",
-        value=(
-            f"**Current prices:** Yes: $`{market.yes_price:.2f}` | No: $`{market.no_price:.2f}`\n"
-            f"**Volume:** `{market.volume}`"
-        ),
-        inline=False,
+        name="Yes Price",
+        value=f"${market.yes_price:.2f}",
+        inline=True,
     )
 
-    # User Info
     embed.add_field(
-        name="Your Position",
-        value=(
-            f"**Balance:** `${balance:,.2f}`\n"
-            f"**Shares:** Yes: `{yes_shares}` | No: `{no_shares}`"
-        ),
-        inline=False,
+        name="No Price",
+        value=(f"${market.no_price:.2f}"),
+        inline=True,
     )
 
-    # Trade Info
     embed.add_field(
-        name="Proposed Trade",
-        value=(
-            f"**Action:** {action} `{abs_quantity}` **{'yes' if is_yes_shares else 'no'}** shares\n"
-            f"**{cost_or_proceeds}:** `${abs(cost):,.2f}`"
-        ),
-        inline=False,
+        name="Volume",
+        value=str(market.volume),
+        inline=True,
     )
 
-    # Outcome Info
+    embed.add_field(name="", value="", inline=False)
+
     embed.add_field(
-        name="Projected Outcome",
-        value=(
-            f"**New Balance:** `${new_balance:,.2f}`\n"
-            f"**New Prices:** Yes: $`{new_yes_price:.2f}` | No: $`{new_no_price:.2f}`"
-        ),
-        inline=False,
+        name="Action",
+        value=f"{action} {abs_quantity} {'Yes' if is_yes_shares else 'No'} shares",
+        inline=True,
+    )
+
+    embed.add_field(
+        name=cost_or_proceeds,
+        value=f"${abs(cost):,.2f}",
+        inline=True,
+    )
+
+    new_holdings = ""
+    if new_no_shares and new_yes_shares:
+        new_holdings = f"{new_no_shares} No | {new_yes_shares} Yes"
+    elif new_no_shares:
+        new_holdings = f"{new_no_shares} No shares"
+    else:
+        new_holdings = f"{new_yes_shares} Yes shares"
+
+    embed.add_field(
+        name="New holdings",
+        value=new_holdings,
+        inline=True,
+    )
+
+    embed.add_field(
+        name="Balance change",
+        value=f"{balance:,.2f} → ${new_balance:,.2f}",
+        inline=True,
+    )
+
+    embed.add_field(
+        name="Market movement",
+        value=f"P(yes): {yes_price:.2f}% → {new_yes_price:.2f}%",
+        inline=True,
     )
 
     if invalid_trade:
@@ -174,7 +155,7 @@ async def start_trade_flow(
 
         def on_confirm():
             exchange.ledger.user_trade(
-                author=interaction.author,
+                author=interaction.user,
                 user_id=user.id,
                 market_id=market.id,
                 share_type="Yes" if is_yes_shares else "No",
@@ -183,6 +164,8 @@ async def start_trade_flow(
                 old_balance=balance,
                 new_balance=new_balance,
             )
+            # Trigger update by accessing market
+            return exchange.markets[market.id]
 
     view = ConfirmView(
         author=interaction.user,
@@ -190,12 +173,46 @@ async def start_trade_flow(
         invalid_trade=invalid_trade,
     )
 
-    message = await interaction.edit_original_response(
-        content="", embed=embed, view=view
-    )
-    view.message = message
+    await interaction.edit_original_response(content="", embed=embed, view=view)
 
-    # Update channel top message
-    starter_message = await interaction.channel.fetch_message(interaction.channel.id)
-    if starter_message:
-        await starter_message.edit(content="", embed=create_market_embed(market))
+
+class ConfirmView(ui.View):
+    def __init__(self, author: discordUser, on_confirm: Callable, invalid_trade: bool):
+        super().__init__(timeout=180)  # 3-minute timeout
+        self.author = author
+        self.on_confirm = on_confirm
+        self.message: InteractionMessage | None = None
+        if invalid_trade:
+            for child in self.children:
+                if isinstance(child, ui.Button) and child.label == "Confirm":
+                    child.disabled = True
+
+    def disable_buttons(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def on_timeout(self):
+        if self.message:
+            self.disable_buttons()
+            await self.message.edit(content="⌛️ **Order Timed Out**", view=self)
+
+    @ui.button(label="Confirm", style=ButtonStyle.green)
+    @require_author
+    async def confirm(self, interaction: Interaction, button: ui.Button):
+        self.disable_buttons()
+        await interaction.response.edit_message(view=self)
+        updated_market = self.on_confirm()
+
+        await interaction.followup.send("✅ **Trade successful!**", ephemeral=True)
+        starter_message = await interaction.channel.fetch_message(
+            interaction.channel.id
+        )
+        if starter_message:
+            await starter_message.edit(embed=create_market_embed(updated_market))
+
+    @ui.button(label="Cancel", style=ButtonStyle.red)
+    @require_author
+    async def cancel(self, interaction: Interaction, button: ui.Button):
+        self.disable_buttons()
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("❌ **Order Cancelled.**", ephemeral=True)

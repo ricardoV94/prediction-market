@@ -154,6 +154,7 @@ async def on_ready():
             new_thread = await forum_channel.create_thread(
                 name=f"{market.question} (#{market.id})", embed=market_embed
             )
+            print(new_thread)
             MARKET_TOPIC_IDS[new_thread.id] = market_id
             LOGGER.info(f"Created thread for market {market_id}")
 
@@ -213,12 +214,42 @@ async def trade(
     quantity: int,
 ):
     await interaction.response.defer(ephemeral=True)
+
+    try:
+        market_id = MARKET_TOPIC_IDS[interaction.channel.id]
+    except KeyError:
+        # Sometimes on_ready doesn't read the existing topics
+        try:
+            market_id = int(interaction.channel.name.split("#")[-1][:-1])
+        except (IndexError, ValueError):
+            LOGGER.debug(
+                f"User {interaction.user} tried to trade outside of a market topic"
+            )
+            await interaction.followup.send(
+                content="❌ **Invalid location:** You can only trade inside a market topic."
+            )
+            return
+        else:
+            if market_id in EXCHANGE.markets:
+                LOGGER.warn(
+                    f"User {interaction.user} trading in a market topic {market_id} that was not previously known"
+                )
+                MARKET_TOPIC_IDS[interaction.channel.id] = market_id
+            else:
+                LOGGER.error(
+                    f"User {interaction.user} trading in a market topic {market_id} that is not in Exchange"
+                )
+                await interaction.followup.send(
+                    content="❌ **Error:** Bot is not aware of this market. Please inform admin."
+                )
+                return
+
     await start_trade_flow(
         interaction=interaction,
         user_id=EXCHANGE.discord_user_ids[interaction.user.id],
+        market_id=market_id,
         is_yes_shares=yes_shares,
         quantity=quantity,
-        market_topic_ids=MARKET_TOPIC_IDS,
         exchange=EXCHANGE,
     )
 
