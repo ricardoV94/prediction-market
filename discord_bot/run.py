@@ -5,7 +5,7 @@ from os import getenv
 from pathlib import Path
 from pprint import pformat
 from traceback import format_exc
-from typing import Iterable
+from typing import Iterable, Literal
 
 from discord import Client, Intents, Interaction, Object, app_commands
 from dotenv import load_dotenv
@@ -22,44 +22,47 @@ def setup_package_logging(
     package_names: Iterable[str] = ("discord_bot", "market"),
     level: int = logging.DEBUG,
     root_level: int = logging.WARNING,  # Keep libraries quiet (INFO/DEBUG hidden)
+    log_file: Path | str | None = None,
 ):
-    # Configure root logger (affects all third-party libs)
+    formatter = logging.Formatter(
+        "%(asctime)s: %(levelname)s: %(name)s: %(message)s",
+        datefmt="%d/%m/%Y %H:%M:%S",
+    )
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    file_handler = None
+    if log_file:
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_path, mode="a")
+        file_handler.setFormatter(formatter)
+
+    # Configure root logger
     root = getLogger()
     root.setLevel(root_level)
-    if not root.handlers:
-        # Add a default StreamHandler for root if nothing is configured yet
-        root_handler = logging.StreamHandler()
-        root_handler.setLevel(root_level)
-        root_handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s: %(levelname)s: %(name)s: %(message)s",
-                datefmt="%d/%m/%Y %H:%M:%S",
-            )
-        )
-        root.addHandler(root_handler)
+    root.handlers.clear()
+    root.addHandler(stream_handler)
+    if file_handler is not None:
+        root.addHandler(file_handler)
 
-    # Configure your package loggers with their own handler at DEBUG
+    # Configure your package loggers
     for name in package_names:
         logger = getLogger(name)
         logger.setLevel(level)
-        handler = logging.StreamHandler()
-        handler.setLevel(level)
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s: %(levelname)s: %(name)s: %(message)s",
-                datefmt="%d/%m/%Y %H:%M:%S",
-            )
-        )
-        # Optional: avoid duplicate handlers if this runs more than once
         logger.handlers.clear()
-        logger.addHandler(handler)
-        # Prevent records from bubbling to root (which might re-log them)
-        logger.propagate = False
+        logger.propagate = False  # Prevent double-logging to root
+        logger.addHandler(stream_handler)
+        logger.setLevel(level)
+        if file_handler is not None:
+            logger.addHandler(file_handler)
 
 
 setup_package_logging(
     package_names=("discord_bot", "market"),
     level=logging.DEBUG,
+    log_file="data/discord_bot.log",
 )
 
 LOGGER = getLogger("discord_bot.run")
@@ -197,22 +200,22 @@ async def positions(interaction: Interaction):
     )
 
 
-@tree.command(
-    name="trade", description="Buy shares in this market. Use negative quantity to sell"
-)
+@tree.command(name="trade", description="Buy or sell shares in this market")
 @app_commands.describe(
-    yes_shares="True: Yes shares, False: No shares",
-    quantity="Number of shares to buy.",
+    quantity="Number of shares to buy. Negative to sell",
+    kind="Yes or No shares",
 )
 @check_registered
 @check_guild
 @handle_errors
 async def trade(
     interaction: Interaction,
-    yes_shares: bool,
     quantity: int,
+    kind: Literal["Yes", "No"],
 ):
     await interaction.response.defer(ephemeral=True)
+
+    assert kind in ("Yes", "No"), kind
 
     try:
         market_id = MARKET_TOPIC_IDS[interaction.channel.id]
@@ -247,7 +250,7 @@ async def trade(
         interaction=interaction,
         user_id=EXCHANGE.discord_user_ids[interaction.user.id],
         market_id=market_id,
-        is_yes_shares=yes_shares,
+        is_yes_shares=kind.lower() == "yes",
         quantity=quantity,
         exchange=EXCHANGE,
     )

@@ -5,7 +5,6 @@ from discord import ButtonStyle, Interaction, InteractionMessage, ui
 from discord_bot.permissions import require_author
 from market.exchange import Exchange
 
-
 OLD_SIGNUP_BONUS = 5_000.0
 NEW_SIGNUP_BALANCE = 10_000.0
 
@@ -39,16 +38,9 @@ class RegistrationView(ui.View):
         interaction: Interaction,
         exchange: Exchange,
     ):
-        super().__init__(timeout=180)  # 3-minute timeout
+        super().__init__()
         self.author = interaction.user
-        self.message: InteractionMessage | None = None
         self.exchange = exchange
-
-    async def on_timeout(self):
-        if self.message:
-            for item in self.children:
-                item.disabled = True
-            await self.message.edit(content="⌛️ **Registration Timed Out**", view=self)
 
     @ui.button(label="Yes", style=ButtonStyle.green)
     @require_author

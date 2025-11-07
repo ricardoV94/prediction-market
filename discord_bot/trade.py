@@ -172,7 +172,7 @@ async def start_trade_flow(
             return exchange.markets[market.id], quantity
 
     view = ConfirmView(
-        author=interaction.user,
+        interaction=interaction,
         on_confirm=on_confirm,
         invalid_trade=invalid_trade,
     )
@@ -181,18 +181,24 @@ async def start_trade_flow(
 
 
 class ConfirmView(ui.View):
-    def __init__(self, author: discordUser, on_confirm: Callable, invalid_trade: bool):
+    def __init__(
+        self,
+        interaction: Interaction,
+        on_confirm: Callable,
+        invalid_trade: bool,
+    ):
         super().__init__(timeout=180)  # 3-minute timeout
-        self.author = author
+        self.interaction = interaction
+        self.author = interaction.user
         self.on_confirm = on_confirm
-        self.message: InteractionMessage | None = None
         if invalid_trade:
             for child in self.children:
                 if isinstance(child, ui.Button) and child.label == "Confirm":
                     child.disabled = True
 
     async def on_timeout(self):
-        await self.message.edit(content="⌛️ **Order Timed Out**", view=None)
+        await self.interaction.edit_original_response(view=None)
+        await self.interaction.followup.send("⌛️ **Order Timed Out**", ephemeral=True)
 
     @ui.button(label="Confirm", style=ButtonStyle.green)
     @require_author
@@ -209,9 +215,11 @@ class ConfirmView(ui.View):
         await interaction.followup.send(
             f"👀 Someone traded {shares_traded} shares", ephemeral=False
         )
+        self.stop()
 
     @ui.button(label="Cancel", style=ButtonStyle.red)
     @require_author
     async def cancel(self, interaction: Interaction, button: ui.Button):
         await interaction.response.edit_message(view=None)
         await interaction.followup.send("❌ **Order Cancelled.**", ephemeral=True)
+        self.stop()
