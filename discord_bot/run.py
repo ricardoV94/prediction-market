@@ -201,21 +201,13 @@ async def positions(interaction: Interaction):
 
 
 @tree.command(name="trade", description="Buy or sell shares in this market")
-@app_commands.describe(
-    quantity="Number of shares to buy. Negative to sell",
-    kind="Yes or No shares",
-)
 @check_registered
 @check_guild
 @handle_errors
 async def trade(
     interaction: Interaction,
-    quantity: int,
-    kind: Literal["Yes", "No"],
 ):
     await interaction.response.defer(ephemeral=True)
-
-    assert kind in ("Yes", "No"), kind
 
     try:
         market_id = MARKET_TOPIC_IDS[interaction.channel.id]
@@ -248,11 +240,9 @@ async def trade(
 
     await start_trade_flow(
         interaction=interaction,
-        user_id=EXCHANGE.discord_user_ids[interaction.user.id],
-        market_id=market_id,
-        is_yes_shares=kind.lower() == "yes",
-        quantity=quantity,
         exchange=EXCHANGE,
+        market_id=market_id,
+        user_id=EXCHANGE.discord_user_ids[interaction.user.id],
     )
 
 

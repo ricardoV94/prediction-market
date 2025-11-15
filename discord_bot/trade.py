@@ -1,19 +1,18 @@
 from logging import getLogger
-from typing import Callable
 
 from discord import (
     ButtonStyle,
     Color,
     Embed,
     Interaction,
-    InteractionMessage,
     ui,
 )
-from discord import User as discordUser
 
 from discord_bot.market_description import create_market_embed
+
+# TODO: Reenable require_author
 from discord_bot.permissions import require_author
-from market.exchange import Exchange, MarketStatus, Shares
+from market.exchange import Exchange, Market, MarketStatus, Shares, User
 
 LOGGER = getLogger(__name__)
 
@@ -22,19 +21,26 @@ async def start_trade_flow(
     interaction: Interaction,
     user_id: int,
     market_id: int,
-    is_yes_shares: bool,
-    quantity: int,
     exchange: Exchange,
 ):
     LOGGER.debug(f"User considering trading: {interaction.user}")
 
-    if quantity == 0:
-        await interaction.followup.send(
-            content="✅ **Traded zero shares:** To the mind that is still, the whole universe surrenders."
-        )
-        return
+    view = TradeView(
+        exchange=exchange,
+        market_id=market_id,
+        user_id=user_id,
+    )
 
-    # TODO: Decorator for actions that require being registered
+    await interaction.edit_original_response(content="", embed=view.embed, view=view)
+
+
+def create_trade_embed(
+    exchange: Exchange,
+    market_id: int,
+    user_id: int,
+    is_yes_shares: bool,
+    quantity: int,
+):
     market = exchange.markets[market_id]
     user = exchange.users[user_id]
     balance = user.balance
@@ -44,7 +50,7 @@ async def start_trade_flow(
     traded_yes_shares = quantity * is_yes_shares
     traded_no_shares = quantity * (not is_yes_shares)
 
-    cost, new_no_price, new_yes_price = market.simulate_trade(
+    cost, _new_no_price, new_yes_price = market.simulate_trade(
         traded_shares=Shares(no=traded_no_shares, yes=traded_yes_shares)
     )
     new_balance = balance - cost
@@ -107,7 +113,7 @@ async def start_trade_flow(
 
     embed.add_field(
         name="Action",
-        value=f"{action} {abs_quantity} {'Yes' if is_yes_shares else 'No'} shares",
+        value=f"{action} **{abs_quantity}** {'Yes' if is_yes_shares else 'No'} shares",
         inline=True,
     )
 
@@ -151,62 +157,119 @@ async def start_trade_flow(
         embed.set_footer(
             text=f"❌ {invalid_reason}",
         )
-
-        def on_confirm():
-            raise RuntimeError("on_confirm should not be possible")
     else:
         embed.set_footer(
             text="Please confirm your order. This will expire in 3 minutes."
         )
-
-        def on_confirm():
-            exchange.ledger.user_trade(
-                author=interaction.user,
-                user_id=user.id,
-                market_id=market.id,
-                share_type="Yes" if is_yes_shares else "No",
-                quantity=quantity,
-                cost=cost,
-                old_balance=balance,
-                new_balance=new_balance,
-            )
-            # Trigger update by accessing market
-            return exchange.markets[market.id], quantity
-
-    view = ConfirmView(
-        interaction=interaction,
-        on_confirm=on_confirm,
-        invalid_trade=invalid_trade,
-    )
-
-    await interaction.edit_original_response(content="", embed=embed, view=view)
+    return embed
 
 
-class ConfirmView(ui.View):
+class TradeView(ui.View):
     def __init__(
         self,
-        interaction: Interaction,
-        on_confirm: Callable,
-        invalid_trade: bool,
+        exchange: Exchange,
+        market_id: int,
+        user_id: int,
     ):
         super().__init__(timeout=180)  # 3-minute timeout
-        self.interaction = interaction
-        self.author = interaction.user
-        self.on_confirm = on_confirm
-        if invalid_trade:
-            for child in self.children:
-                if isinstance(child, ui.Button) and child.label == "Confirm":
-                    child.disabled = True
+        self.exchange = exchange
+        self.market_id = market_id
+        self.user_id = user_id
+        self.is_yes_shares = True
+        self.quantity = 0
 
-    async def on_timeout(self):
-        await self.interaction.edit_original_response(view=None)
-        await self.interaction.followup.send("⌛️ **Order Timed Out**", ephemeral=True)
+        for child in self.children:
+            if isinstance(child, ui.Button):
+                if child.label == "Yes shares":
+                    self.yes_button = child
+                elif child.label == "No shares":
+                    self.no_button = child
 
-    @ui.button(label="Confirm", style=ButtonStyle.green)
-    @require_author
+    @property
+    def embed(self) -> Embed:
+        return create_trade_embed(
+            exchange=self.exchange,
+            market_id=self.market_id,
+            user_id=self.user_id,
+            is_yes_shares=self.is_yes_shares,
+            quantity=self.quantity,
+        )
+
+    async def update_view(self, interaction: Interaction):
+        await interaction.response.edit_message(embed=self.embed, view=self)
+
+    @ui.button(label="Yes shares", style=ButtonStyle.primary, row=0)
+    async def select_yes(self, interaction: Interaction, button: ui.Button):
+        self.is_yes_shares = True
+        self.yes_button.style = ButtonStyle.primary
+        self.no_button.style = ButtonStyle.secondary
+        await self.update_view(interaction)
+
+    @ui.button(label="No shares", style=ButtonStyle.secondary, row=0)
+    async def select_no(self, interaction: Interaction, button: ui.Button):
+        self.is_yes_shares = False
+        self.yes_button.style = ButtonStyle.secondary
+        self.no_button.style = ButtonStyle.primary
+        await self.update_view(interaction)
+
+    @ui.button(label="+ 1", style=ButtonStyle.gray, row=1)
+    async def add_1(self, interaction: Interaction, button: ui.Button):
+        self.quantity += 1
+        await self.update_view(interaction)
+
+    @ui.button(label="+ 5", style=ButtonStyle.gray, row=1)
+    async def add_5(self, interaction: Interaction, button: ui.Button):
+        self.quantity += 5
+        await self.update_view(interaction)
+
+    @ui.button(label="+ 10", style=ButtonStyle.gray, row=1)
+    async def subtract_10(self, interaction: Interaction, button: ui.Button):
+        self.quantity += 10
+        await self.update_view(interaction)
+
+    @ui.button(label="- 5", style=ButtonStyle.gray, row=1)
+    async def subtract_5(self, interaction: Interaction, button: ui.Button):
+        self.quantity -= 5
+        await self.update_view(interaction)
+
+    @ui.button(label="- 1", style=ButtonStyle.gray, row=1)
+    async def subtract_1(self, interaction: Interaction, button: ui.Button):
+        self.quantity -= 1
+        await self.update_view(interaction)
+
+    @ui.button(label="Confirm", style=ButtonStyle.green, row=2)
     async def confirm(self, interaction: Interaction, button: ui.Button):
         await interaction.response.edit_message(view=None)
-        updated_market, shares_traded = self.on_confirm()
+
+        # TODO: Store the info from the last embed and check validity again
+        # to avoid stale data issues
+        # TODO: Add lock? How do you do that with async?
+        # TODO: Reenable 0 shares witty remark
+        #
+        market = self.exchange.markets[self.market_id]
+        old_price = market.yes_price
+        balance = self.exchange.users[self.user_id].balance
+        traded_yes_shares = self.quantity * self.is_yes_shares
+        traded_no_shares = self.quantity * (not self.is_yes_shares)
+        cost, _new_no_price, _new_yes_price = market.simulate_trade(
+            traded_shares=Shares(no=traded_no_shares, yes=traded_yes_shares)
+        )
+        new_balance = balance - cost
+
+        self.exchange.ledger.user_trade(
+            author=interaction.user,
+            user_id=self.user_id,
+            market_id=self.market_id,
+            share_type="Yes" if self.is_yes_shares else "No",
+            quantity=self.quantity,
+            cost=cost,
+            old_balance=balance,
+            new_balance=new_balance,
+        )
+
+        # Trigger update by accessing market
+        updated_market = self.exchange.markets[self.market_id]
+        new_price = updated_market.yes_price
 
         await interaction.followup.send("✅ **Trade successful!**", ephemeral=True)
         starter_message = await interaction.channel.fetch_message(
@@ -215,12 +278,13 @@ class ConfirmView(ui.View):
         if starter_message:
             await starter_message.edit(embed=create_market_embed(updated_market))
         await interaction.followup.send(
-            f"👀 Someone traded {shares_traded} shares", ephemeral=False
+            f"👀 Someone traded {self.quantity} shares. Δ P(yes) {old_price:.2f}% → {new_price:.2f}%",
+            ephemeral=False,
         )
         self.stop()
 
-    @ui.button(label="Cancel", style=ButtonStyle.red)
-    @require_author
+    @ui.button(label="Cancel", style=ButtonStyle.red, row=2)
+    # @require_author
     async def cancel(self, interaction: Interaction, button: ui.Button):
         await interaction.response.edit_message(view=None)
         await interaction.followup.send("❌ **Order Cancelled.**", ephemeral=True)
