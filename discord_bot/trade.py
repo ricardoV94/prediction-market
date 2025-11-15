@@ -8,7 +8,7 @@ from discord import (
     ui,
 )
 
-from discord_bot.market_description import create_market_embed
+from discord_bot.market_description import create_market_embed, update_market_top_post
 from market.exchange import Exchange, Market, MarketStatus, Shares, User
 
 LOGGER = getLogger(__name__)
@@ -293,12 +293,12 @@ class TradeView(ui.View):
             f"👀 Someone traded {self.quantity} shares. Δ P(yes) {info['yes_price']:.2f}% → {info['new_yes_price']:.2f}%",
             ephemeral=False,
         )
-        starter_message = await interaction.channel.fetch_message(
-            interaction.channel.id
+        # Access the market from the exchange to trigger update
+        updated_market = self.exchange.markets[self.market.id]
+        await update_market_top_post(
+            thread=interaction.channel,
+            market=updated_market,
         )
-        if starter_message:
-            updated_market = self.exchange.markets[self.market.id]
-            await starter_message.edit(embed=create_market_embed(updated_market))
 
     @ui.button(label="Cancel", style=ButtonStyle.red, row=2)
     async def cancel(self, interaction: Interaction, button: ui.Button):

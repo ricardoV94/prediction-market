@@ -1,6 +1,35 @@
 from datetime import datetime
+
 import discord
+
 from market.exchange import Market, MarketStatus
+
+
+async def update_market_top_post(thread, market: Market):
+    starter_message = await thread.fetch_message(thread.id)
+    await starter_message.edit(
+        content=market_sentiment(market),
+        embed=create_market_embed(market),
+    )
+
+
+def market_sentiment(market: Market) -> str:
+    price_yes = market.yes_price
+    if price_yes < 5:
+        sentiment = "Not happening"
+    elif price_yes < 20:
+        sentiment = "Strong no"
+    elif price_yes < 40:
+        sentiment = "Leaning no"
+    elif price_yes <= 60:
+        sentiment = "Toss-up"
+    elif price_yes <= 80:
+        sentiment = "Leaning yes"
+    elif price_yes <= 95:
+        sentiment = "Strong yes"
+    else:
+        sentiment = "Sure thing"
+    return sentiment
 
 
 def color_for_market(market: Market):
