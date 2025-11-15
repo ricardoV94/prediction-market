@@ -6,24 +6,7 @@ from discord import Interaction, ui
 
 from market.exchange import Exchange
 
-
 LOGGER = getLogger(__name__)
-
-
-def require_author(func: Callable[[ui.View, Interaction, ui.Button], Coroutine]):
-    """
-    Decorator that checks if the interaction user is the author of the view.
-    """
-
-    async def wrapper(self: ui.View, interaction: Interaction, button: ui.Button):
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "You are not authorized to do this.", ephemeral=True
-            )
-            return
-        await func(self, interaction, button)
-
-    return wrapper
 
 
 def check_guild_factory(guild_id: int):

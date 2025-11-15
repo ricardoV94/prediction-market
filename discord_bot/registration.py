@@ -1,8 +1,7 @@
 from logging import getLogger
 
-from discord import ButtonStyle, Interaction, InteractionMessage, ui
+from discord import ButtonStyle, Interaction, ui
 
-from discord_bot.permissions import require_author
 from market.exchange import Exchange
 
 OLD_SIGNUP_BONUS = 5_000.0
@@ -43,14 +42,12 @@ class RegistrationView(ui.View):
         self.exchange = exchange
 
     @ui.button(label="Yes", style=ButtonStyle.green)
-    @require_author
     async def yes(self, interaction: Interaction, button: ui.Button):
         await interaction.response.send_modal(
             SpreadSheetRegistrationModel(exchange=self.exchange)
         )
 
     @ui.button(label="No", style=ButtonStyle.red)
-    @require_author
     async def no(self, interaction: Interaction, button: ui.Button):
         for item in self.children:
             item.disabled = True
